@@ -17,7 +17,8 @@ jobs:
       run: |
         script=$(cat <<EOF
         pr_number = ${{github.event.pull_request.number}} 
-        print(${{github.event.pull_request.title}})
+        print(pr_number)
+        print(type(${{github.event.pull_request.title}}))
         pr_title_feat = str(${{github.event.pull_request.title}})
         """
         index = pr_title_feat.find(":")
