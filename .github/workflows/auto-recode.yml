@@ -16,10 +16,10 @@ jobs:
     - name: do work
       run: |
         script=$(cat <<EOF
-        pr_number = ${{github.event.pull_request.number}} 
-        print(pr_number)
-        print("${{github.event.pull_request.title}}")
-        #pr_title_feat = str(${{github.event.pull_request.title}})
+        pr_number = ${{github.event.pull_request.number}}
+        print(type(pr_number)) 
+        pr_title_feat = "${{github.event.pull_request.title}}"
+        print(type(pr_title_feat)) 
         """
         index = pr_title_feat.find(":")
 
