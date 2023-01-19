@@ -16,10 +16,8 @@ jobs:
     - name: do work
       run: |
         script=$(cat <<EOF
-        import sys
-        pr_number = ${{github.event.pull_request.number}} #sys.argv[1]
-        pr_title_feat = ${{github.event.pull_request.title}} #sys.argv[2]
-        #pr_title_cont = sys.argv[3 : len(sys.argv)]
+        pr_number = ${{github.event.pull_request.number}} 
+        pr_title_feat = str(${{github.event.pull_request.title}})
 
         index = pr_title_feat.find(":")
 
@@ -30,7 +28,7 @@ jobs:
         file.close()
         EOF
         )
-        echo "$script" | python - ${{github.event.pull_request.number}} ${{github.event.pull_request.title}}
+        echo "$script" | python
 
     - name: commit message for adding change log file
       uses: stefanzweifel/git-auto-commit-action@v4
