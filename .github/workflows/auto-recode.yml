@@ -37,7 +37,7 @@ jobs:
         for t_type in t_types :
             if t_type in files : 
                 target_file = t_type
-                os.environ[FEAT] = t_type
+                ${{ env.FEAT }} = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
                 exit(0)
