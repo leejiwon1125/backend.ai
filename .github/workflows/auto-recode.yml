@@ -42,7 +42,6 @@ jobs:
                 target_file = t_type
                 myfile.write("FEAT=" + t_type)  
                 myfile.close()
-                #os.environ['FEAT'] = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
                 exit(0)
@@ -55,12 +54,8 @@ jobs:
         EOF
         )
         echo "$script" | python
-    - name: backup
-      if: env.FEAT == 'default'
-      run : echo This workflow did nothing.
 
     - name: commit message for changing change log file
-      if: env.IS_CHANGED != 'default'
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
         commit_message: GitHub Actions changed file name. ${{ env.FEAT }} -> '${{github.event.pull_request.number}}.${{ env.FEAT }}.md' 
