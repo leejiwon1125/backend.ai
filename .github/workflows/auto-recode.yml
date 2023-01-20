@@ -50,4 +50,4 @@ jobs:
     - name: commit message for adding change log file
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: GitHub Actions added ${{github.event.pull_request.number}}.YOUR_PR_FEAT.md file in backend.ai/changes folder and its content is your PR's title without feature.
+        commit_message: GitHub Actions changed file name. 'feat' -> '${{github.event.pull_request.number}}.feat.md' 
