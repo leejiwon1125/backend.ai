@@ -19,7 +19,7 @@ jobs:
         import os
 
         pr_number = "${{github.event.pull_request.number}}"
-        path = "/home/runner/work/backend.ai/backend.ai/changes
+        path = "/home/runner/work/backend.ai/backend.ai/changes"
         t_types = ["breaking","feature","enhance","deprecation","fix","doc","deps","misc"]
         target_file = ""
 
