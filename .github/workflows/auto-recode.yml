@@ -1,0 +1,53 @@
+name: auto-recoder
+on: 
+  pull_request:
+permissions:
+  contents: write
+  
+jobs:
+  auto-recode:
+    runs-on: ubuntu-latest 
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: ${{ github.head_ref }}
+
+    - name: do work
+      run: |
+        script=$(cat <<EOF
+        import os
+
+        pr_number = "${{github.event.pull_request.number}}"
+        path = "/home/runner/work/backend.ai/backend.ai/changes
+        t_types = ["breaking","feature","enhance","deprecation","fix","doc","deps","misc"]
+        target_file = ""
+
+        files = os.listdir(path)
+        print(str(files) + " are in changes floder.")
+
+        for file in files :
+            if str(file[0:file.find(".")]) == pr_number :
+                print("Change log file already exist for this PR.")
+                exit(1)
+
+        for t_type in t_types :
+            if t_type in files : 
+                target_file = t_type
+                os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
+                print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
+                exit(2)
+
+        if target_file == "":
+            print("There is not change log file for this PR in changes folder.")
+            print("Also, there is not feature named file in changes folder.")
+            exit(3)
+        
+        EOF
+        )
+        echo "$script" | python
+
+    - name: commit message for adding change log file
+      uses: stefanzweifel/git-auto-commit-action@v4
+      with:
+        commit_message: GitHub Actions added ${{github.event.pull_request.number}}.YOUR_PR_FEAT.md file in backend.ai/changes folder and its content is your PR's title without feature.
