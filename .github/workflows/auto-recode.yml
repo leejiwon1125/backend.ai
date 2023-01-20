@@ -21,6 +21,9 @@ jobs:
         script=$(cat <<EOF
         import os
 
+        env_file = os.getenv('GITHUB_ENV')
+        myfile = open(env_file, "a")
+
         pr_number = "${{github.event.pull_request.number}}"
         path = "/home/runner/work/backend.ai/backend.ai/changes"
         t_types = ["breaking","feature","enhance","deprecation","fix","doc","deps","misc"]
@@ -37,7 +40,9 @@ jobs:
         for t_type in t_types :
             if t_type in files : 
                 target_file = t_type
-                os.environ['FEAT'] = t_type
+                myfile.write("FEAT=" + t_type)  
+                myfile.close()
+                #os.environ['FEAT'] = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
                 exit(0)
@@ -58,4 +63,4 @@ jobs:
       if: env.IS_CHANGED != 'default'
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: GitHub Actions changed file name. $FEAT -> '${{github.event.pull_request.number}}.$FEAT.md' 
+        commit_message: GitHub Actions changed file name. ${{ env.FEAT }} -> '${{github.event.pull_request.number}}.${{ env.FEAT }}.md' 
