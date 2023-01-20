@@ -1,0 +1,22 @@
+name: auto-recoder
+on: 
+  pull_request:
+permissions:
+  contents: write
+  
+jobs:
+  testforenvvar:
+    runs-on: ubuntu-latest 
+    
+    env:
+      action_state: black
+
+    steps:
+    - name: Set the value
+      id: step_one
+      run: |
+        echo "action_state=yellow" >> $GITHUB_ENV
+    - name: Use the value
+      id: step_two
+      run: |
+        echo "${{ env.action_state }}" # This will output 'yellow'
