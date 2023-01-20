@@ -39,9 +39,9 @@ jobs:
             if t_type in files : 
                 target_file = t_type
                 ${{ env.FEAT }} = t_type
-                os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
+                #os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
-                input_string = '"'+"FEAT="+t_type+'"'+" >> $GITHUB_ENV"
+                input_string = '"'+"FEAT="+t_type+'"'+" >> $GI"+"THUB_ENV"
                 subprocess.run(['echo', input_string])
                 exit(0)
 
