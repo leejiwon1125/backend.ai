@@ -29,7 +29,7 @@ jobs:
         for file in files :
             if str(file[0:file.find(".")]) == pr_number :
                 print("Change log file already exist for this PR.")
-                exit(0)
+                exit(1)
 
         for t_type in t_types :
             if t_type in files : 
@@ -41,13 +41,17 @@ jobs:
         if target_file == "":
             print("There is not change log file for this PR in changes folder.")
             print("Also, there is not feature named file in changes folder.")
-            exit(0)
+            exit(1)
         
         EOF
         )
         echo "$script" | python
+    - name: backup
+      if: ${{ failure() }} 
+      run : echo This workflow did nothing.
 
-    - name: commit message for adding change log file
+    - name: commit message for changing change log file
+      if: ${{ success() }}
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
         commit_message: GitHub Actions changed file name. 'feat' -> '${{github.event.pull_request.number}}.feat.md' 
