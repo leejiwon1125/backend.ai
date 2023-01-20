@@ -7,13 +7,16 @@ permissions:
 jobs:
   auto-recode:
     runs-on: ubuntu-latest 
+    
+    env:
+      IS_CHANGED: 0
+      FEAT: feat
 
     steps:
     - uses: actions/checkout@v3
       with:
         ref: ${{ github.head_ref }}
-    env:
-      IS_CHANGED: 0
+    
 
     - name: do work
       run: |
@@ -31,17 +34,21 @@ jobs:
         for file in files :
             if str(file[0:file.find(".")]) == pr_number :
                 print("Change log file already exist for this PR.")
+                exit(0)
 
         for t_type in t_types :
             if t_type in files : 
                 target_file = t_type
+                os.environ['FEAT'] = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
                 os.environ['IS_CHANGED'] = '1'
+                exit(0)
 
         if target_file == "":
             print("There is not change log file for this PR in changes folder.")
             print("Also, there is not feature named file in changes folder.")
+            exit(0)
         
         EOF
         )
@@ -54,4 +61,4 @@ jobs:
       if: env.IS_CHANGED == '1'
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: GitHub Actions changed file name. 'feat' -> '${{github.event.pull_request.number}}.feat.md' 
+        commit_message: GitHub Actions changed file name. $FEAT -> '${{github.event.pull_request.number}}.$FEAT.md' 
