@@ -29,19 +29,19 @@ jobs:
         for file in files :
             if str(file[0:file.find(".")]) == pr_number :
                 print("Change log file already exist for this PR.")
-                exit(1)
+                exit(0)
 
         for t_type in t_types :
             if t_type in files : 
                 target_file = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
-                exit(2)
+                exit(0)
 
         if target_file == "":
             print("There is not change log file for this PR in changes folder.")
             print("Also, there is not feature named file in changes folder.")
-            exit(3)
+            exit(0)
         
         EOF
         )
