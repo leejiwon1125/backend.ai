@@ -20,7 +20,9 @@ jobs:
       run: |
         script=$(cat <<EOF
         import os
+        import subprocess
 
+        subprocess.run(["ls", "-l"])
         pr_number = "${{github.event.pull_request.number}}"
         path = "/home/runner/work/backend.ai/backend.ai/changes"
         t_types = ["breaking","feature","enhance","deprecation","fix","doc","deps","misc"]
@@ -40,6 +42,7 @@ jobs:
                 ${{ env.FEAT }} = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
+                
                 exit(0)
 
         if target_file == "":
@@ -50,6 +53,7 @@ jobs:
         EOF
         )
         echo "$script" | python
+        echo 
     - name: backup
       if: env.FEAT == 'default'
       run : echo This workflow did nothing.
