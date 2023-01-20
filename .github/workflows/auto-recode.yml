@@ -9,15 +9,13 @@ jobs:
     runs-on: ubuntu-latest 
     
     env:
-      IS_CHANGED: 0
-      FEAT: feat
+      FEAT: default
 
     steps:
     - uses: actions/checkout@v3
       with:
         ref: ${{ github.head_ref }}
     
-
     - name: do work
       run: |
         script=$(cat <<EOF
@@ -42,7 +40,6 @@ jobs:
                 os.environ['FEAT'] = t_type
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
-                os.environ['IS_CHANGED'] = '1'
                 exit(0)
 
         if target_file == "":
@@ -54,11 +51,11 @@ jobs:
         )
         echo "$script" | python
     - name: backup
-      if: env.IS_CHANGED == '0'
+      if: env.FEAT == 'default'
       run : echo This workflow did nothing.
 
     - name: commit message for changing change log file
-      if: env.IS_CHANGED == '1'
+      if: env.IS_CHANGED != 'default'
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
         commit_message: GitHub Actions changed file name. $FEAT -> '${{github.event.pull_request.number}}.$FEAT.md' 
