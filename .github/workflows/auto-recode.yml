@@ -20,7 +20,9 @@ jobs:
       run: |
         script=$(cat <<EOF
         import os
-        import subprocess
+
+        env_file = os.getenv('GITHUB_ENV')
+        myfile = open(env_file, "a")
 
         pr_number = "${{github.event.pull_request.number}}"
         path = "/home/runner/work/backend.ai/backend.ai/changes"
@@ -38,11 +40,10 @@ jobs:
         for t_type in t_types :
             if t_type in files : 
                 target_file = t_type
-                ${{ env.FEAT }} = t_type
+                myfile.write("FEAT=" + t_type)  
+                myfile.close()
                 os.rename(path + "/" + target_file , path + "/" + pr_number + "." + target_file + ".md")
                 print(target_file +" file changed to "+ pr_number+"."+target_file+".md")
-                input_string = '"'+"FEAT="+t_type+'"'+" >> $GITHUB_ENV"
-                subprocess.run(['echo', input_string])
                 exit(0)
 
         if target_file == "":
@@ -53,13 +54,8 @@ jobs:
         EOF
         )
         echo "$script" | python
-        echo 
-    - name: backup
-      if: env.FEAT == 'default'
-      run : echo This workflow did nothing.
 
     - name: commit message for changing change log file
-      if: env.IS_CHANGED != 'default'
       uses: stefanzweifel/git-auto-commit-action@v4
       with:
-        commit_message: GitHub Actions changed file name. ${{ env.FEAT }} -> '${{github.event.pull_request.number}}.${{ env.FEAT }}.md'
+        commit_message: GitHub Actions changed file name. ${{ env.FEAT }} -> '${{github.event.pull_request.number}}.${{ env.FEAT }}.md' 
