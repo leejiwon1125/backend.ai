@@ -31,13 +31,11 @@ async def prepare_dotfiles(
     # Feed SSH keypair and dotfiles if exists.
     internal_data = {}
     query = (
-        sa.select(
-            [
-                keypairs.c.ssh_public_key,
-                keypairs.c.ssh_private_key,
-                keypairs.c.dotfiles,
-            ]
-        )
+        sa.select([
+            keypairs.c.ssh_public_key,
+            keypairs.c.ssh_private_key,
+            keypairs.c.dotfiles,
+        ])
         .select_from(keypairs)
         .where(keypairs.c.access_key == access_key)
     )
@@ -78,7 +76,7 @@ async def prepare_dotfiles(
             dotfile_path = PurePosixPath("/home/work", dotfile["path"])
         if dotfile_path in vfolder_kernel_paths:
             raise BackendError(
-                f"There is a kernel-side path from vfolders that conflicts with "
+                "There is a kernel-side path from vfolders that conflicts with "
                 f"a dotfile '{dotfile['path']}'.",
             )
 

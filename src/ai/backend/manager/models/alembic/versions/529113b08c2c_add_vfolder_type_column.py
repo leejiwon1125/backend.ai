@@ -5,6 +5,7 @@ Revises: c481d3dc6c7d
 Create Date: 2020-04-09 16:37:35.460936
 
 """
+
 import textwrap
 
 import sqlalchemy as sa
@@ -13,7 +14,8 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import text
 from sqlalchemy.sql.expression import bindparam
 
-from ai.backend.manager.models import VFolderOwnershipType, VFolderPermission, VFolderUsageMode
+from ai.backend.common.types import VFolderUsageMode
+from ai.backend.manager.models import VFolderOwnershipType, VFolderPermission
 from ai.backend.manager.models.base import GUID, EnumValueType, IDColumn, convention
 
 # revision identifiers, used by Alembic.

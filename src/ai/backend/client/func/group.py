@@ -1,10 +1,12 @@
 import textwrap
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 from ai.backend.client.output.fields import group_fields
 from ai.backend.client.output.types import FieldSpec
 
+from ...cli.types import Undefined, undefined
 from ..session import api_session
+from ..types import set_if_set
 from .base import BaseFunction, api_function, resolve_fields
 
 __all__ = ("Group",)
@@ -134,12 +136,13 @@ class Group(BaseFunction):
         cls,
         domain_name: str,
         name: str,
+        *,
         description: str = "",
         is_active: bool = True,
         total_resource_slots: Optional[str] = None,
         allowed_vfolder_hosts: Optional[str] = None,
-        integration_id: str = None,
-        fields: Iterable[FieldSpec | str] = None,
+        integration_id: Optional[str] = None,
+        fields: Iterable[FieldSpec | str] | None = None,
     ) -> dict:
         """
         Creates a new group with the given options.
@@ -179,13 +182,14 @@ class Group(BaseFunction):
     async def update(
         cls,
         gid: str,
-        name: str = None,
-        description: str = None,
-        is_active: bool = None,
-        total_resource_slots: Optional[str] = None,
-        allowed_vfolder_hosts: Optional[str] = None,
-        integration_id: str = None,
-        fields: Iterable[FieldSpec | str] = None,
+        *,
+        name: str | Undefined = undefined,
+        description: str | Undefined = undefined,
+        is_active: bool | Undefined = undefined,
+        total_resource_slots: Optional[str] | Undefined = undefined,
+        allowed_vfolder_hosts: Optional[str] | Undefined = undefined,
+        integration_id: str | Undefined = undefined,
+        fields: Iterable[FieldSpec | str] | None = None,
     ) -> dict:
         """
         Update existing group.
@@ -200,16 +204,16 @@ class Group(BaseFunction):
             }
         """
         )
+        inputs: dict[str, Any] = {}
+        set_if_set(inputs, "name", name)
+        set_if_set(inputs, "description", description)
+        set_if_set(inputs, "is_active", is_active)
+        set_if_set(inputs, "total_resource_slots", total_resource_slots)
+        set_if_set(inputs, "allowed_vfolder_hosts", allowed_vfolder_hosts)
+        set_if_set(inputs, "integration_id", integration_id)
         variables = {
             "gid": gid,
-            "input": {
-                "name": name,
-                "description": description,
-                "is_active": is_active,
-                "total_resource_slots": total_resource_slots,
-                "allowed_vfolder_hosts": allowed_vfolder_hosts,
-                "integration_id": integration_id,
-            },
+            "input": inputs,
         }
         data = await api_session.get().Admin._query(query, variables)
         return data["modify_group"]

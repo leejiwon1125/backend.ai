@@ -29,6 +29,8 @@ importer-image = "lablup/importer:manylinux2010"
 
 event-loop = "asyncio"
 
+# The order of agent selection.
+agent-selection-resource-priority = ["cuda", "rocm", "tpu", "cpu", "mem"]
 
 [docker-registry]
 ssl-verify = true
@@ -62,6 +64,15 @@ protocol = "tcp"
 ssl-enabled = true
 ssl-verify = true
 
+[logging.graylog]
+host = "127.0.0.1"
+port = 12201
+
+# If True, validate the Graylog server’s certificate. In this case specifying ca-certs is also required.
+ssl-verify = false
+ca-certs = ""
+keyfile = ""
+certfile = ""
 
 [debug]
 enabled = false

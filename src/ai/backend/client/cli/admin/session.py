@@ -14,7 +14,7 @@ from ai.backend.client.session import Session
 
 from ..extensions import pass_ctx_obj
 from ..pretty import print_fail
-from ..session import session as user_session
+from ..session.lifecycle import session as user_session
 from ..types import CLIContext
 from . import admin
 
@@ -34,30 +34,27 @@ def _list_cmd(name: str = "list", docs: str = None):
         "-s",
         "--status",
         default=None,
-        type=click.Choice(
-            [
-                "PENDING",
-                "SCHEDULED",
-                "PREPARING",
-                "BUILDING",
-                "RUNNING",
-                "RESTARTING",
-                "RESIZING",
-                "SUSPENDED",
-                "TERMINATING",
-                "TERMINATED",
-                "ERROR",
-                "CANCELLED",
-                "ALL",  # special case
-            ]
-        ),
+        type=click.Choice([
+            "PENDING",
+            "SCHEDULED",
+            "PULLING",
+            "PREPARING",
+            "RUNNING",
+            "RESTARTING",
+            "RUNNING_DEGRADED",
+            "TERMINATING",
+            "TERMINATED",
+            "ERROR",
+            "CANCELLED",
+            "ALL",  # special case
+        ]),
         help="Filter by the given status",
     )
     @click.option(
         "--access-key",
         type=str,
         default=None,
-        help="Get sessions for a specific access key " "(only works if you are a super-admin)",
+        help="Get sessions for a specific access key (only works if you are a super-admin)",
     )
     @click.option("--name-only", is_flag=True, help="Display session names only.")
     @click.option(
@@ -86,7 +83,10 @@ def _list_cmd(name: str = "list", docs: str = None):
         "--all",
         is_flag=True,
         default=False,
-        help='Alias of "backend.ai ps --status=ALL" listing all sessions regardless of status. Ignores --status option.',
+        help=(
+            'Alias of "backend.ai ps --status=ALL" listing all sessions regardless of status.'
+            " Ignores --status option."
+        ),
     )
     def list(
         ctx: CLIContext,
@@ -122,85 +122,70 @@ def _list_cmd(name: str = "list", docs: str = None):
             elif format is not None:
                 options = format.split(",")
                 for opt in options:
-                    if opt not in session_fields:
+                    if opt not in session_fields or opt == "containers":
                         ctx.output.print_fail(f"There is no such format option: {opt}")
                         sys.exit(ExitCode.INVALID_ARGUMENT)
                 fields = [session_fields[opt] for opt in options]
             else:
                 if session.api_version[0] >= 6:
                     fields.append(session_fields["session_id"])
-                fields.extend(
-                    [
-                        session_fields["group_name"],
-                        session_fields["kernel_id"],
-                        session_fields["image"],
-                        session_fields["type"],
-                        session_fields["status"],
-                        session_fields["status_info"],
-                        session_fields["status_changed"],
-                        session_fields["result"],
-                    ]
-                )
+                fields.extend([
+                    session_fields["group_name"],
+                    session_fields["main_kernel_id"],
+                    session_fields["image"],
+                    session_fields["type"],
+                    session_fields["status"],
+                    session_fields["status_info"],
+                    session_fields["status_changed"],
+                    session_fields["result"],
+                ])
                 if detail:
-                    fields.extend(
-                        [
-                            session_fields["tag"],
-                            session_fields["created_at"],
-                            session_fields["occupied_slots"],
-                        ]
-                    )
+                    fields.extend([
+                        session_fields["tag"],
+                        session_fields["created_at"],
+                        session_fields["occupying_slots"],
+                    ])
 
         no_match_name = None
         if status is None:
-            status = ",".join(
-                [
-                    "PENDING",
-                    "SCHEDULED",
-                    "PREPARING",
-                    "PULLING",
-                    "RUNNING",
-                    "RESTARTING",
-                    "TERMINATING",
-                    "RESIZING",
-                    "SUSPENDED",
-                    "ERROR",
-                ]
-            )
+            status = ",".join([
+                "PENDING",
+                "SCHEDULED",
+                "PULLING",
+                "PREPARING",
+                "RUNNING",
+                "RUNNING_DEGRADED",
+                "TERMINATING",
+                "ERROR",
+            ])
             no_match_name = "active"
         if running:
-            status = ",".join(
-                [
-                    "PREPARING",
-                    "PULLING",
-                    "RUNNING",
-                ]
-            )
+            status = ",".join([
+                "PREPARING",
+                "RUNNING",
+                "RUNNING_DEGRADED",
+            ])
             no_match_name = "running"
         if dead:
-            status = ",".join(
-                [
-                    "CANCELLED",
-                    "TERMINATED",
-                ]
-            )
+            status = ",".join([
+                "CANCELLED",
+                "TERMINATED",
+            ])
             no_match_name = "dead"
         if status == "ALL" or all:
-            status = ",".join(
-                [
-                    "PENDING",
-                    "SCHEDULED",
-                    "PREPARING",
-                    "PULLING",
-                    "RUNNING",
-                    "RESTARTING",
-                    "TERMINATING",
-                    "RESIZING",
-                    "SUSPENDED",
-                    "ERROR",
-                    "CANCELLED",
-                    "TERMINATED",
-                ]
-            )
+            status = ",".join([
+                "PENDING",
+                "SCHEDULED",
+                "PULLING",
+                "PREPARING",
+                "RUNNING",
+                "RESTARTING",
+                "RUNNING_DEGRADED",
+                "TERMINATING",
+                "TERMINATED",
+                "ERROR",
+                "CANCELLED",
+            ])
             no_match_name = "in any status"
         if no_match_name is None:
             no_match_name = status.lower()
@@ -220,6 +205,7 @@ def _list_cmd(name: str = "list", docs: str = None):
                     fetch_func,
                     initial_page_offset=offset,
                     page_size=limit,
+                    plain=plain,
                 )
         except Exception as e:
             ctx.output.print_error(e)
@@ -252,25 +238,24 @@ def _info_cmd(docs: str = None):
             ]
             if session_.api_version[0] >= 6:
                 fields.append(session_fields["session_id"])
-                fields.append(session_fields["kernel_id"])
-            fields.extend(
-                [
-                    session_fields["image"],
-                    session_fields["tag"],
-                    session_fields["created_at"],
-                    session_fields["terminated_at"],
-                    session_fields["status"],
-                    session_fields["status_info"],
-                    session_fields["status_data"],
-                    session_fields["occupied_slots"],
-                ]
-            )
+                fields.append(session_fields["main_kernel_id"])
+            fields.extend([
+                session_fields["image"],
+                session_fields["tag"],
+                session_fields["created_at"],
+                session_fields["terminated_at"],
+                session_fields["status"],
+                session_fields["status_info"],
+                session_fields["status_data"],
+                session_fields["occupying_slots"],
+                session_fields["idle_checks"],
+            ])
             if session_.api_version[0] >= 6:
                 fields.append(session_fields["containers"])
             else:
                 fields.append(session_fields_v5["containers"])
             fields.append(session_fields["dependencies"])
-            q = "query($id: UUID!) {" "  compute_session(id: $id) {" "    $fields" "  }" "}"
+            q = "query($id: UUID!) {  compute_session(id: $id) {    $fields  }}"
             try:
                 uuid.UUID(session_id)
             except ValueError:

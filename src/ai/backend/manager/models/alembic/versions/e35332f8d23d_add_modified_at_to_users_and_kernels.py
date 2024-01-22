@@ -5,9 +5,9 @@ Revises: da24ff520049
 Create Date: 2020-07-01 14:02:11.022032
 
 """
+
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql.expression import bindparam
 
 from ai.backend.manager.models.base import IDColumn, convention

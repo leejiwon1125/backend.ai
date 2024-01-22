@@ -5,6 +5,7 @@ Revises: c3e74dcf1808
 Create Date: 2018-01-04 14:33:39.173062
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -21,7 +22,7 @@ def upgrade():
         "kernels",
         ["access_key", "sess_id"],
         unique=True,
-        postgresql_where=sa.text("kernels.status != 'TERMINATED' and " "kernels.role = 'master'"),
+        postgresql_where=sa.text("kernels.status != 'TERMINATED' and kernels.role = 'master'"),
     )
 
 

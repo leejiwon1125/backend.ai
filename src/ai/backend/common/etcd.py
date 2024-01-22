@@ -18,7 +18,6 @@ from typing import (
     AsyncGenerator,
     AsyncIterator,
     Callable,
-    Dict,
     Iterable,
     List,
     Mapping,
@@ -26,6 +25,7 @@ from typing import (
     Optional,
     ParamSpec,
     Tuple,
+    TypeAlias,
     TypeVar,
     Union,
     cast,
@@ -51,7 +51,7 @@ __all__ = (
 
 Event = namedtuple("Event", "key event value")
 
-log = BraceStyleAdapter(logging.getLogger(__name__))
+log = BraceStyleAdapter(logging.getLogger(__spec__.name))  # type: ignore[name-defined]
 
 
 class ConfigScopes(enum.Enum):
@@ -98,11 +98,12 @@ def _slash(v: str):
 P = ParamSpec("P")
 R = TypeVar("R")
 
-GetPrefixValue = Mapping[str, Union["GetPrefixValue", Optional[str]]]
+GetPrefixValue: TypeAlias = "Mapping[str, GetPrefixValue | Optional[str]]"
+NestedStrKeyedMapping: TypeAlias = "Mapping[str, str | NestedStrKeyedMapping]"
+NestedStrKeyedDict: TypeAlias = "dict[str, str | NestedStrKeyedDict]"
 
 
 class AsyncEtcd:
-
     etcd: EtcdClient
 
     _creds: Optional[EtcdCredential]
@@ -113,17 +114,15 @@ class AsyncEtcd:
         namespace: str,
         scope_prefix_map: Mapping[ConfigScopes, str],
         *,
-        credentials: dict[str, str] = None,
+        credentials: dict[str, str] | None = None,
         encoding: str = "utf-8",
         watch_reconnect_intvl: float = 0.5,
     ) -> None:
-        self.scope_prefix_map = t.Dict(
-            {
-                t.Key(ConfigScopes.GLOBAL): t.String(allow_blank=True),
-                t.Key(ConfigScopes.SGROUP, optional=True): t.String,
-                t.Key(ConfigScopes.NODE, optional=True): t.String,
-            }
-        ).check(scope_prefix_map)
+        self.scope_prefix_map = t.Dict({
+            t.Key(ConfigScopes.GLOBAL): t.String(allow_blank=True),
+            t.Key(ConfigScopes.SGROUP, optional=True): t.String,
+            t.Key(ConfigScopes.NODE, optional=True): t.String,
+        }).check(scope_prefix_map)
         if credentials is not None:
             self._creds = EtcdCredential(credentials["user"], credentials["password"])
         else:
@@ -191,7 +190,7 @@ class AsyncEtcd:
     async def put_prefix(
         self,
         key: str,
-        dict_obj: Mapping[str, str],
+        dict_obj: NestedStrKeyedMapping,
         *,
         scope: ConfigScopes = ConfigScopes.GLOBAL,
         scope_prefix_map: Mapping[ConfigScopes, str] = None,
@@ -207,9 +206,9 @@ class AsyncEtcd:
         :return:
         """
         scope_prefix = self._merge_scope_prefix_map(scope_prefix_map)[scope]
-        flattened_dict: Dict[str, str] = {}
+        flattened_dict: NestedStrKeyedDict = {}
 
-        def _flatten(prefix: str, inner_dict: Mapping[str, str]) -> None:
+        def _flatten(prefix: str, inner_dict: NestedStrKeyedDict) -> None:
             for k, v in inner_dict.items():
                 if k == "":
                     flattened_key = prefix
@@ -220,7 +219,7 @@ class AsyncEtcd:
                 else:
                     flattened_dict[flattened_key] = v
 
-        _flatten(key, dict_obj)
+        _flatten(key, cast(NestedStrKeyedDict, dict_obj))
 
         def _txn(action: EtcdTransactionAction):
             for k, v in flattened_dict.items():
@@ -231,7 +230,7 @@ class AsyncEtcd:
 
     async def put_dict(
         self,
-        dict_obj: Mapping[str, str],
+        flattened_dict_obj: Mapping[str, str],
         *,
         scope: ConfigScopes = ConfigScopes.GLOBAL,
         scope_prefix_map: Mapping[ConfigScopes, str] = None,
@@ -249,7 +248,7 @@ class AsyncEtcd:
         scope_prefix = self._merge_scope_prefix_map(scope_prefix_map)[scope]
 
         def _pipe(txn: EtcdTransactionAction):
-            for k, v in dict_obj.items():
+            for k, v in flattened_dict_obj.items():
                 txn.put(self._mangle_key(f"{_slash(scope_prefix)}{k}"), str(v))
 
         async with self.etcd.connect() as communicator:

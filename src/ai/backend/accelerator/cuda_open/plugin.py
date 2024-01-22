@@ -41,10 +41,12 @@ from ai.backend.agent.stats import (
     Measurement,
     MetricTypes,
     NodeMeasurement,
+    ProcessMeasurement,
     StatContext,
 )
 from ai.backend.agent.types import Container, MountInfo
 from ai.backend.common.types import (
+    AcceleratorMetadata,
     BinarySize,
     DeviceId,
     DeviceModelInfo,
@@ -77,9 +79,20 @@ class CUDADevice(AbstractComputeDevice):
         self.model_name = model_name
         self.uuid = uuid
 
+    def __str__(self) -> str:
+        return (
+            "CUDADevice("
+            f"device_id: {self.uuid}, model_name: {self.model_name}, "
+            f"processing_unit: {self.processing_units}, memory_size: {self.memory_size}, "
+            f"numa_node: {self.numa_node}, hw_location: {self.hw_location}"
+            ")"
+        )
+
+    def __repr__(self) -> str:
+        return str(self)
+
 
 class CUDAPlugin(AbstractComputePlugin):
-
     config_watch_enabled = False
 
     key = DeviceName("cuda")
@@ -166,9 +179,7 @@ class CUDAPlugin(AbstractComputePlugin):
             if dev_id in self.device_mask:
                 continue
             raw_info = libcudart.get_device_props(int(dev_id))
-            sysfs_node_path = (
-                "/sys/bus/pci/devices/" f"{raw_info['pciBusID_str'].lower()}/numa_node"
-            )
+            sysfs_node_path = f"/sys/bus/pci/devices/{raw_info['pciBusID_str'].lower()}/numa_node"
             node: Optional[int]
             try:
                 node = int(Path(sysfs_node_path).read_text().strip())
@@ -270,13 +281,16 @@ class CUDAPlugin(AbstractComputePlugin):
     ) -> Sequence[ContainerMeasurement]:
         return []
 
+    async def gather_process_measures(
+        self, ctx: StatContext, pid_map: Mapping[int, str]
+    ) -> Sequence[ProcessMeasurement]:
+        return []
+
     async def create_alloc_map(self) -> AbstractAllocMap:
         devices = await self.list_devices()
         return DiscretePropertyAllocMap(
             device_slots={
-                dev.device_id: (
-                    DeviceSlotInfo(SlotTypes.COUNT, SlotName("cuda.device"), Decimal(1))
-                )
+                dev.device_id: DeviceSlotInfo(SlotTypes.COUNT, SlotName("cuda.device"), Decimal(1))
                 for dev in devices
             },
         )
@@ -316,12 +330,10 @@ class CUDAPlugin(AbstractComputePlugin):
                     if vol_param.startswith(vol_name + ":"):
                         _, _, permission = vol_param.split(":")
                         driver = nvidia_params["VolumeDriver"]
-                        await docker.volumes.create(
-                            {
-                                "Name": vol_name,
-                                "Driver": driver,
-                            }
-                        )
+                        await docker.volumes.create({
+                            "Name": vol_name,
+                            "Driver": driver,
+                        })
             for vol_name in required_volumes:
                 for vol_param in nvidia_params["Volumes"]:
                     if vol_param.startswith(vol_name + ":"):
@@ -358,22 +370,20 @@ class CUDAPlugin(AbstractComputePlugin):
             if self.docker_version >= (19, 3, 0):
                 docker_config: Dict[str, Any] = {}
                 if assigned_device_ids:
-                    docker_config.update(
-                        {
-                            "HostConfig": {
-                                "DeviceRequests": [
-                                    {
-                                        "Driver": "nvidia",
-                                        "DeviceIDs": assigned_device_ids,
-                                        # "all" does not work here
-                                        "Capabilities": [
-                                            ["utility", "compute", "video", "graphics", "display"],
-                                        ],
-                                    },
-                                ],
-                            },
-                        }
-                    )
+                    docker_config.update({
+                        "HostConfig": {
+                            "DeviceRequests": [
+                                {
+                                    "Driver": "nvidia",
+                                    "DeviceIDs": assigned_device_ids,
+                                    # "all" does not work here
+                                    "Capabilities": [
+                                        ["utility", "compute", "video", "graphics", "display"],
+                                    ],
+                                },
+                            ],
+                        },
+                    })
                 return docker_config
             else:
                 return {
@@ -400,16 +410,14 @@ class CUDAPlugin(AbstractComputePlugin):
             if device.device_id in device_ids:
                 proc = device.processing_units
                 mem = BinarySize(device.memory_size)
-                attached_devices.append(
-                    {  # TODO: update common.types.DeviceModelInfo
-                        "device_id": device.device_id,
-                        "model_name": device.model_name,
-                        "data": {
-                            "smp": proc,
-                            "mem": mem,
-                        },
-                    }
-                )
+                attached_devices.append({  # TODO: update common.types.DeviceModelInfo
+                    "device_id": device.device_id,
+                    "model_name": device.model_name,
+                    "data": {
+                        "smp": proc,
+                        "mem": mem,
+                    },
+                })
         return attached_devices
 
     async def restore_from_container(
@@ -423,20 +431,21 @@ class CUDAPlugin(AbstractComputePlugin):
         if resource_spec is None:
             return
         if hasattr(alloc_map, "apply_allocation"):
-            alloc_map.apply_allocation(
-                {
-                    SlotName("cuda.device"): resource_spec.allocations.get(
-                        DeviceName("cuda"),
-                        {},
-                    ).get(
-                        SlotName("cuda.device"),
-                        {},
-                    ),
-                }
-            )
+            alloc_map.apply_allocation({
+                SlotName("cuda.device"): resource_spec.allocations.get(
+                    DeviceName("cuda"),
+                    {},
+                ).get(
+                    SlotName("cuda.device"),
+                    {},
+                ),
+            })
         else:
             alloc_map.allocations[SlotName("cuda.device")].update(
-                resource_spec.allocations.get(DeviceName("cuda"), {},).get(
+                resource_spec.allocations.get(
+                    DeviceName("cuda"),
+                    {},
+                ).get(
                     SlotName("cuda.device"),
                     {},
                 ),
@@ -470,3 +479,13 @@ class CUDAPlugin(AbstractComputePlugin):
         self, source_path: Path, device_alloc: Mapping[SlotName, Mapping[DeviceId, Decimal]]
     ) -> List[MountInfo]:
         return []
+
+    def get_metadata(self) -> AcceleratorMetadata:
+        return {
+            "slot_name": self.slot_types[0][0],
+            "human_readable_name": "GPU",
+            "description": "CUDA-capable GPU",
+            "display_unit": "GPU",
+            "number_format": {"binary": False, "round_length": 0},
+            "display_icon": "gpu1",
+        }

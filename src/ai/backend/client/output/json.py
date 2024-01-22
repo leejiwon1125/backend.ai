@@ -18,13 +18,11 @@ class JsonOutputHandler(BaseOutputHandler):
     ) -> None:
         if item is None:
             print(
-                json.dumps(
-                    {
-                        "count": 0,
-                        "total_count": 0,
-                        "items": [],
-                    }
-                )
+                json.dumps({
+                    "count": 0,
+                    "total_count": 0,
+                    "items": [],
+                })
             )
             return
         field_map = {f.field_name: f for f in fields}
@@ -35,10 +33,11 @@ class JsonOutputHandler(BaseOutputHandler):
                     "total_count": 1,
                     "items": [
                         {
-                            field_map[k]
-                            .alt_name: field_map[k]
-                            .formatter.format_json(v, field_map[k])
+                            field_map[k].alt_name: field_map[k].formatter.format_json(
+                                v, field_map[k]
+                            )
                             for k, v in item.items()
+                            if k in field_map
                         },
                     ],
                 },
@@ -59,10 +58,11 @@ class JsonOutputHandler(BaseOutputHandler):
                     "total_count": len(items),
                     "items": [
                         {
-                            field_map[k]
-                            .alt_name: field_map[k]
-                            .formatter.format_json(v, field_map[k])
+                            field_map[k].alt_name: field_map[k].formatter.format_json(
+                                v, field_map[k]
+                            )
                             for k, v in item.items()
+                            if k in field_map
                         }
                         for item in items
                     ],
@@ -92,6 +92,7 @@ class JsonOutputHandler(BaseOutputHandler):
                 {
                     field_map[k].alt_name: field_map[k].formatter.format_json(v, field_map[k])
                     for k, v in item.items()
+                    if k in field_map
                 }
                 for item in items
             ]
@@ -111,6 +112,7 @@ class JsonOutputHandler(BaseOutputHandler):
         fetch_func: Callable[[int, int], PaginatedResult],
         initial_page_offset: int,
         page_size: int = None,
+        plain=False,
     ) -> None:
         page_size = page_size or 20
         result = fetch_func(initial_page_offset, page_size)
@@ -122,10 +124,11 @@ class JsonOutputHandler(BaseOutputHandler):
                     "total_count": result.total_count,
                     "items": [
                         {
-                            field_map[k]
-                            .alt_name: field_map[k]
-                            .formatter.format_json(v, field_map[k])
+                            field_map[k].alt_name: field_map[k].formatter.format_json(
+                                v, field_map[k]
+                            )
                             for k, v in item.items()
+                            if k in field_map
                         }
                         for item in result.items
                     ],

@@ -104,7 +104,9 @@ class FieldSpec:
 
 class FieldSet(UserDict, Mapping[str, FieldSpec]):
     def __init__(self, fields: Sequence[FieldSpec]) -> None:
-        super().__init__({f.alt_name: f for f in fields})
+        fields_set = {f.alt_name: f for f in fields}
+        fields_set.update({f.field_ref: fields_set[f.alt_name] for f in fields})
+        super().__init__(fields_set)
 
 
 T = TypeVar("T")
@@ -153,6 +155,7 @@ class BaseOutputHandler(metaclass=ABCMeta):
         fetch_func: Callable[[int, int], PaginatedResult[T]],
         initial_page_offset: int,
         page_size: int = None,
+        plain: bool = False,
     ) -> None:
         raise NotImplementedError
 

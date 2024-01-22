@@ -2,7 +2,7 @@ import argparse
 import random
 import string
 
-import hash_phrase
+import hash_phrase  # pants: no-infer-dep
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -20,7 +20,7 @@ parser.add_argument(
     default="-",
 )
 parser.add_argument(
-    "--no-capitalize", help="Don`\t capitalize the words in the password", action="store_true"
+    "--no-capitalize", help="Don't capitalize the words in the password", action="store_true"
 )
 parser.add_argument(
     "-e",

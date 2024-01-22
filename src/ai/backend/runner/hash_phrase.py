@@ -38,7 +38,6 @@ def hash_phrase(
     separator="",
     capitalize=True,
 ):
-
     if dictionary is None:
         dictionary = load_dictionary()
 
@@ -54,8 +53,7 @@ def hash_phrase(
     # Check entropy
     if num_words * entropy_per_word > available_entropy:
         raise Exception(
-            "The output entropy of the specified hashfunc (%d) is too small."
-            % available_entropy  # NOQA
+            "The output entropy of the specified hashfunc (%d) is too small." % available_entropy  # NOQA
         )
 
     # Generate phrase

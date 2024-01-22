@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import uuid
@@ -5,27 +6,39 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
 import attrs
 import graphene
+from graphene.types.inputobjecttype import set_input_object_type_default_value
+from graphql import Undefined
 
+set_input_object_type_default_value(Undefined)
+
+from ai.backend.common.types import QuotaScopeID
 from ai.backend.manager.defs import DEFAULT_IMAGE_ARCH
+from ai.backend.manager.models.gql_relay import AsyncNode, ConnectionResolverResult
+
+from .etcd import (
+    ContainerRegistry,
+    CreateContainerRegistry,
+    DeleteContainerRegistry,
+    ModifyContainerRegistry,
+)
 
 if TYPE_CHECKING:
-    from graphql.execution.executors.asyncio import AsyncioExecutor  # pants: no-infer-dep
-
     from ai.backend.common.bgtask import BackgroundTaskManager
     from ai.backend.common.etcd import AsyncEtcd
     from ai.backend.common.types import (
         AccessKey,
         AgentId,
         RedisConnectionInfo,
+        SessionId,
         SlotName,
         SlotTypes,
-        SessionId,
     )
 
     from ..api.manager import ManagerStatus
     from ..config import LocalConfig, SharedConfig
-    from ..registry import AgentRegistry
+    from ..idle import IdleCheckerHost
     from ..models.utils import ExtendedAsyncSAEngine
+    from ..registry import AgentRegistry
     from .storage import StorageSessionManager
 
 from ..api.exceptions import (
@@ -37,9 +50,19 @@ from ..api.exceptions import (
 )
 from .acl import PredefinedAtomicPermission
 from .agent import Agent, AgentList, AgentSummary, AgentSummaryList, ModifyAgent
-from .base import DataLoaderManager, privileged_query, scoped_query
+from .base import DataLoaderManager, PaginatedConnectionField, privileged_query, scoped_query
 from .domain import CreateDomain, DeleteDomain, Domain, ModifyDomain, PurgeDomain
-from .group import CreateGroup, DeleteGroup, Group, ModifyGroup, PurgeGroup
+from .endpoint import Endpoint, EndpointList, EndpointToken, EndpointTokenList
+from .group import (
+    CreateGroup,
+    DeleteGroup,
+    Group,
+    GroupConnection,
+    GroupNode,
+    ModifyGroup,
+    ProjectType,
+    PurgeGroup,
+)
 from .image import (
     AliasImage,
     ClearImages,
@@ -54,17 +77,23 @@ from .image import (
 from .kernel import (
     ComputeContainer,
     ComputeContainerList,
-    ComputeSession,
-    ComputeSessionList,
     LegacyComputeSession,
     LegacyComputeSessionList,
 )
 from .keypair import CreateKeyPair, DeleteKeyPair, KeyPair, KeyPairList, ModifyKeyPair
 from .resource_policy import (
     CreateKeyPairResourcePolicy,
+    CreateProjectResourcePolicy,
+    CreateUserResourcePolicy,
     DeleteKeyPairResourcePolicy,
+    DeleteProjectResourcePolicy,
+    DeleteUserResourcePolicy,
     KeyPairResourcePolicy,
     ModifyKeyPairResourcePolicy,
+    ModifyProjectResourcePolicy,
+    ModifyUserResourcePolicy,
+    ProjectResourcePolicy,
+    UserResourcePolicy,
 )
 from .resource_preset import (
     CreateResourcePreset,
@@ -72,6 +101,7 @@ from .resource_preset import (
     ModifyResourcePreset,
     ResourcePreset,
 )
+from .routing import Routing, RoutingList
 from .scaling_group import (
     AssociateScalingGroupWithDomain,
     AssociateScalingGroupWithKeyPair,
@@ -86,6 +116,7 @@ from .scaling_group import (
     ModifyScalingGroup,
     ScalingGroup,
 )
+from .session import ComputeSession, ComputeSessionList
 from .storage import StorageVolume, StorageVolumeList
 from .user import (
     CreateUser,
@@ -93,15 +124,23 @@ from .user import (
     ModifyUser,
     PurgeUser,
     User,
+    UserConnection,
     UserList,
+    UserNode,
     UserRole,
     UserStatus,
 )
 from .vfolder import (
+    ModelCard,
+    ModelCardConnection,
+    QuotaScope,
+    SetQuotaScope,
+    UnsetQuotaScope,
     VirtualFolder,
     VirtualFolderList,
     VirtualFolderPermission,
     VirtualFolderPermissionList,
+    ensure_quota_scope_accessible_by_user,
 )
 
 
@@ -116,12 +155,14 @@ class GraphQueryContext:
     access_key: str
     db: ExtendedAsyncSAEngine
     redis_stat: RedisConnectionInfo
+    redis_live: RedisConnectionInfo
     redis_image: RedisConnectionInfo
     manager_status: ManagerStatus
     known_slot_types: Mapping[SlotName, SlotTypes]
     background_task_manager: BackgroundTaskManager
     storage_manager: StorageSessionManager
     registry: AgentRegistry
+    idle_checker_host: IdleCheckerHost
 
 
 class Mutations(graphene.ObjectType):
@@ -171,6 +212,16 @@ class Mutations(graphene.ObjectType):
     delete_keypair_resource_policy = DeleteKeyPairResourcePolicy.Field()
 
     # super-admin only
+    create_user_resource_policy = CreateUserResourcePolicy.Field()
+    modify_user_resource_policy = ModifyUserResourcePolicy.Field()
+    delete_user_resource_policy = DeleteUserResourcePolicy.Field()
+
+    # super-admin only
+    create_project_resource_policy = CreateProjectResourcePolicy.Field()
+    modify_project_resource_policy = ModifyProjectResourcePolicy.Field()
+    delete_project_resource_policy = DeleteProjectResourcePolicy.Field()
+
+    # super-admin only
     create_resource_preset = CreateResourcePreset.Field()
     modify_resource_preset = ModifyResourcePreset.Field()
     delete_resource_preset = DeleteResourcePreset.Field()
@@ -188,11 +239,20 @@ class Mutations(graphene.ObjectType):
     disassociate_all_scaling_groups_with_domain = DisassociateAllScalingGroupsWithDomain.Field()
     disassociate_all_scaling_groups_with_group = DisassociateAllScalingGroupsWithGroup.Field()
 
+    set_quota_scope = SetQuotaScope.Field()
+    unset_quota_scope = UnsetQuotaScope.Field()
+
+    create_container_registry = CreateContainerRegistry.Field()
+    modify_container_registry = ModifyContainerRegistry.Field()
+    delete_container_registry = DeleteContainerRegistry.Field()
+
 
 class Queries(graphene.ObjectType):
     """
     All available GraphQL queries.
     """
+
+    node = AsyncNode.Field()
 
     # super-admin only
     agent = graphene.Field(
@@ -246,6 +306,11 @@ class Queries(graphene.ObjectType):
         is_active=graphene.Boolean(),
     )
 
+    group_node = graphene.Field(
+        GroupNode, id=graphene.String(required=True), description="Added in 24.03.0."
+    )
+    group_nodes = PaginatedConnectionField(GroupConnection, description="Added in 24.03.0.")
+
     group = graphene.Field(
         Group,
         id=graphene.UUID(required=True),
@@ -265,6 +330,13 @@ class Queries(graphene.ObjectType):
         Group,
         domain_name=graphene.String(),
         is_active=graphene.Boolean(),
+        type=graphene.List(
+            graphene.String,
+            default_value=[ProjectType.GENERAL.name],
+            description=(
+                f"Added since 24.03.0. Available values: {', '.join([p.name for p in ProjectType])}"
+            ),
+        ),
     )
 
     image = graphene.Field(
@@ -312,6 +384,11 @@ class Queries(graphene.ObjectType):
         status=graphene.String(),
     )
 
+    user_node = graphene.Field(
+        UserNode, id=graphene.String(required=True), description="Added in 24.03.0."
+    )
+    user_nodes = PaginatedConnectionField(UserConnection, description="Added in 24.03.0.")
+
     keypair = graphene.Field(
         KeyPair,
         domain_name=graphene.String(),
@@ -343,8 +420,18 @@ class Queries(graphene.ObjectType):
         KeyPairResourcePolicy,
         name=graphene.String(),
     )
+    user_resource_policy = graphene.Field(
+        UserResourcePolicy,
+        name=graphene.String(),
+    )
+    project_resource_policy = graphene.Field(
+        ProjectResourcePolicy,
+        name=graphene.String(required=True),
+    )
 
     keypair_resource_policies = graphene.List(KeyPairResourcePolicy)
+    user_resource_policies = graphene.List(UserResourcePolicy)
+    project_resource_policies = graphene.List(ProjectResourcePolicy)
 
     resource_preset = graphene.Field(
         ResourcePreset,
@@ -404,6 +491,11 @@ class Queries(graphene.ObjectType):
         order=graphene.String(),
     )
 
+    vfolder = graphene.Field(
+        VirtualFolder,
+        id=graphene.String(),
+    )
+
     vfolder_list = graphene.Field(  # legacy non-paginated list
         VirtualFolderList,
         limit=graphene.Int(required=True),
@@ -423,6 +515,39 @@ class Queries(graphene.ObjectType):
         offset=graphene.Int(required=True),
         filter=graphene.String(),
         order=graphene.String(),
+    )
+
+    vfolder_own_list = graphene.Field(
+        VirtualFolderList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # intrinsic filters
+        domain_name=graphene.String(),
+        access_key=graphene.String(),  # must be empty for user requests
+    )
+
+    vfolder_invited_list = graphene.Field(
+        VirtualFolderList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # intrinsic filters
+        domain_name=graphene.String(),
+        access_key=graphene.String(),  # must be empty for user requests
+    )
+
+    vfolder_project_list = graphene.Field(
+        VirtualFolderList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # intrinsic filters
+        domain_name=graphene.String(),
+        access_key=graphene.String(),  # must be empty for user requests
     )
 
     vfolders = graphene.List(  # legacy non-paginated list
@@ -491,10 +616,73 @@ class Queries(graphene.ObjectType):
         PredefinedAtomicPermission,
     )
 
+    endpoint = graphene.Field(
+        Endpoint,
+        endpoint_id=graphene.UUID(required=True),
+    )
+
+    endpoint_list = graphene.Field(
+        EndpointList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # filters
+        domain_name=graphene.String(),
+        group_id=graphene.String(),
+        access_key=graphene.String(),
+        project=graphene.UUID(),
+    )
+
+    routing = graphene.Field(
+        Routing,
+        routing_id=graphene.UUID(required=True),
+    )
+
+    routing_list = graphene.Field(
+        RoutingList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # filters
+        endpoint_id=graphene.UUID(),
+    )
+
+    endpoint_token = graphene.Field(
+        EndpointToken,
+        token=graphene.String(required=True),
+    )
+
+    endpoint_token_list = graphene.Field(
+        EndpointTokenList,
+        limit=graphene.Int(required=True),
+        offset=graphene.Int(required=True),
+        filter=graphene.String(),
+        order=graphene.String(),
+        # filters
+        endpoint_id=graphene.UUID(),
+    )
+
+    quota_scope = graphene.Field(
+        QuotaScope,
+        storage_host_name=graphene.String(required=True),
+        quota_scope_id=graphene.String(required=True),
+    )
+
+    container_registry = graphene.Field(ContainerRegistry, hostname=graphene.String(required=True))
+
+    container_registries = graphene.List(ContainerRegistry)
+
+    model_card = graphene.Field(
+        ModelCard, id=graphene.String(required=True), description="Added in 24.03.0."
+    )
+    model_cards = PaginatedConnectionField(ModelCardConnection, description="Added in 24.03.0.")
+
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_agent(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         agent_id: AgentId,
     ) -> Agent:
@@ -509,7 +697,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_agents(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         scaling_group: str = None,
@@ -524,7 +712,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_agent_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -554,7 +742,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=True, user_key="access_key")
     async def resolve_agent_summary(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         agent_id: AgentId,
         *,
@@ -579,7 +767,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=True, user_key="access_key")
     async def resolve_agent_summary_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -618,7 +806,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_domain(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         name: str = None,
@@ -635,20 +823,51 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_domains(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         is_active: bool = None,
     ) -> Sequence[Domain]:
         return await Domain.load_all(info.context, is_active=is_active)
 
+    async def resolve_group_node(
+        root: Any,
+        info: graphene.ResolveInfo,
+        id: str,
+    ):
+        return await GroupNode.get_node(info, id)
+
+    async def resolve_group_nodes(
+        root: Any,
+        info: graphene.ResolveInfo,
+        *,
+        filter: str | None = None,
+        order: str | None = None,
+        offset: int | None = None,
+        after: str | None = None,
+        first: int | None = None,
+        before: str | None = None,
+        last: int | None = None,
+    ) -> ConnectionResolverResult:
+        return await GroupNode.get_connection(
+            info,
+            filter,
+            order,
+            offset,
+            after,
+            first,
+            before,
+            last,
+        )
+
     @staticmethod
     async def resolve_group(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         id: uuid.UUID,
         *,
         domain_name: str = None,
+        type: list[str] = [ProjectType.GENERAL.name],
     ) -> Group:
         ctx: GraphQueryContext = info.context
         client_role = ctx.user["role"]
@@ -683,7 +902,7 @@ class Queries(graphene.ObjectType):
                 ctx,
                 "Group.by_user",
             )
-            client_groups = await loader.load(client_user_id)
+            client_groups = await loader.load(client_user_id, type=[ProjectType[t] for t in type])
             if group.id not in (g.id for g in client_groups):
                 raise InsufficientPrivilege
         else:
@@ -692,7 +911,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_groups_by_name(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         name: str,
         *,
@@ -740,11 +959,12 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_groups(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
         is_active: bool = None,
+        type: list[str] = [ProjectType.GENERAL.name],
     ) -> Sequence[Group]:
         ctx: GraphQueryContext = info.context
         client_role = ctx.user["role"]
@@ -765,11 +985,16 @@ class Queries(graphene.ObjectType):
             return client_groups
         else:
             raise InvalidAPIParameters("Unknown client role")
-        return await Group.load_all(info.context, domain_name=domain_name, is_active=is_active)
+        return await Group.load_all(
+            info.context,
+            domain_name=domain_name,
+            is_active=is_active,
+            type=[ProjectType[t] for t in type],
+        )
 
     @staticmethod
     async def resolve_image(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         reference: str,
         architecture: str,
@@ -791,7 +1016,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_images(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         is_installed=None,
@@ -818,7 +1043,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=True, user_key="email")
     async def resolve_user(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
@@ -835,7 +1060,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=True, user_key="user_id")
     async def resolve_user_from_uuid(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
@@ -853,7 +1078,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_users(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
@@ -888,7 +1113,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_user_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -937,10 +1162,40 @@ class Queries(graphene.ObjectType):
         )
         return UserList(user_list, total_count)
 
+    async def resolve_user_node(
+        root: Any,
+        info: graphene.ResolveInfo,
+        id: str,
+    ):
+        return await UserNode.get_node(info, id)
+
+    async def resolve_user_nodes(
+        root: Any,
+        info: graphene.ResolveInfo,
+        *,
+        filter: str | None = None,
+        order: str | None = None,
+        offset: int | None = None,
+        after: str | None = None,
+        first: int | None = None,
+        before: str | None = None,
+        last: int | None = None,
+    ) -> ConnectionResolverResult:
+        return await UserNode.get_connection(
+            info,
+            filter,
+            order,
+            offset,
+            after,
+            first,
+            before,
+            last,
+        )
+
     @staticmethod
     @scoped_query(autofill_user=True, user_key="access_key")
     async def resolve_keypair(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
@@ -957,7 +1212,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="email")
     async def resolve_keypairs(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         *,
         domain_name: str = None,
@@ -984,7 +1239,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="email")
     async def resolve_keypair_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1016,7 +1271,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_keypair_resource_policy(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         name: str = None,
     ) -> KeyPairResourcePolicy:
@@ -1037,7 +1292,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_keypair_resource_policies(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
     ) -> Sequence[KeyPairResourcePolicy]:
         ctx: GraphQueryContext = info.context
@@ -1057,8 +1312,78 @@ class Queries(graphene.ObjectType):
             raise InvalidAPIParameters("Unknown client role")
 
     @staticmethod
+    async def resolve_user_resource_policy(
+        root: Any,
+        info: graphene.ResolveInfo,
+        name: str = None,
+    ) -> UserResourcePolicy:
+        ctx: GraphQueryContext = info.context
+        user_uuid = ctx.user["uuid"]
+        if name is None:
+            loader = ctx.dataloader_manager.get_loader(
+                ctx,
+                "UserResourcePolicy.by_user",
+            )
+            return await loader.load(user_uuid)
+        else:
+            loader = ctx.dataloader_manager.get_loader(
+                ctx,
+                "UserResourcePolicy.by_name",
+            )
+            return await loader.load(name)
+
+    @staticmethod
+    async def resolve_user_resource_policies(
+        root: Any,
+        info: graphene.ResolveInfo,
+    ) -> Sequence[UserResourcePolicy]:
+        ctx: GraphQueryContext = info.context
+        client_role = ctx.user["role"]
+        user_uuid = ctx.user["uuid"]
+        if client_role == UserRole.SUPERADMIN:
+            return await UserResourcePolicy.load_all(info.context)
+        elif client_role == UserRole.ADMIN:
+            # TODO: filter resource policies by domains?
+            return await UserResourcePolicy.load_all(info.context)
+        elif client_role == UserRole.USER:
+            return await UserResourcePolicy.batch_load_by_user(
+                info.context,
+                [user_uuid],
+            )
+        else:
+            raise InvalidAPIParameters("Unknown client role")
+
+    @staticmethod
+    async def resolve_project_resource_policy(
+        root: Any,
+        info: graphene.ResolveInfo,
+        name: str,
+    ) -> ProjectResourcePolicy:
+        ctx: GraphQueryContext = info.context
+        loader = ctx.dataloader_manager.get_loader(
+            ctx,
+            "ProjectResourcePolicy.by_name",
+        )
+        return await loader.load(name)
+
+    @staticmethod
+    async def resolve_project_resource_policies(
+        root: Any,
+        info: graphene.ResolveInfo,
+    ) -> Sequence[ProjectResourcePolicy]:
+        ctx: GraphQueryContext = info.context
+        client_role = ctx.user["role"]
+        if client_role == UserRole.SUPERADMIN:
+            return await ProjectResourcePolicy.load_all(info.context)
+        elif client_role == UserRole.ADMIN:
+            # TODO: filter resource policies by domains?
+            return await ProjectResourcePolicy.load_all(info.context)
+        else:
+            raise InvalidAPIParameters("Unknown client role")
+
+    @staticmethod
     async def resolve_resource_preset(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         name: str,
     ) -> ResourcePreset:
@@ -1068,7 +1393,7 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_resource_presets(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
     ) -> Sequence[ResourcePreset]:
         return await ResourcePreset.load_all(info.context)
@@ -1076,7 +1401,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_scaling_group(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         name: str,
     ) -> ScalingGroup:
@@ -1090,7 +1415,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_scaling_groups(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         is_active: bool = None,
     ) -> Sequence[ScalingGroup]:
@@ -1099,7 +1424,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_scaling_groups_for_domain(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         domain: str,
         is_active: bool = None,
@@ -1112,8 +1437,8 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
-    async def resolve_scaling_groups_for_group(
-        executor: AsyncioExecutor,
+    async def resolve_scaling_groups_for_user_group(
+        root: Any,
         info: graphene.ResolveInfo,
         user_group,
         is_active: bool = None,
@@ -1127,7 +1452,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_scaling_groups_for_keypair(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         access_key: AccessKey,
         is_active: bool = None,
@@ -1141,7 +1466,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_storage_volume(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         id: str,
     ) -> StorageVolume:
@@ -1150,7 +1475,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_storage_volume_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1172,9 +1497,32 @@ class Queries(graphene.ObjectType):
         return StorageVolumeList(items, total_count)
 
     @staticmethod
+    @privileged_query(UserRole.SUPERADMIN)
+    async def resolve_vfolder(
+        root: Any,
+        info: graphene.ResolveInfo,
+        id: str,
+        *,
+        domain_name: str = None,
+        group_id: uuid.UUID = None,
+        user_id: uuid.UUID = None,
+    ) -> Optional[VirtualFolder]:
+        graph_ctx: GraphQueryContext = info.context
+        user_role = graph_ctx.user["role"]
+        loader = graph_ctx.dataloader_manager.get_loader(
+            graph_ctx,
+            "VirtualFolder.by_id",
+            user_uuid=user_id,
+            user_role=user_role,
+            domain_name=domain_name,
+            group_id=group_id,
+        )
+        return await loader.load(id)
+
+    @staticmethod
     @scoped_query(autofill_user=False, user_key="user_id")
     async def resolve_vfolder_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1208,7 +1556,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @privileged_query(UserRole.SUPERADMIN)
     async def resolve_vfolder_permission_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1233,9 +1581,99 @@ class Queries(graphene.ObjectType):
         return VirtualFolderPermissionList(items, total_count)
 
     @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_id")
+    async def resolve_vfolder_own_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        domain_name: str = None,
+        user_id: uuid.UUID = None,
+        filter: str = None,
+        order: str = None,
+    ) -> VirtualFolderList:
+        total_count = await VirtualFolder.load_count(
+            info.context,
+            domain_name=domain_name,  # scope
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+        )
+        items = await VirtualFolder.load_slice(
+            info.context,
+            limit,
+            offset,
+            domain_name=domain_name,  # scopes
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+            order=order,
+        )
+        return VirtualFolderList(items, total_count)
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_id")
+    async def resolve_vfolder_invited_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        domain_name: str = None,
+        user_id: uuid.UUID = None,  # not used, fixed
+        filter: str = None,
+        order: str = None,
+    ) -> VirtualFolderList:
+        total_count = await VirtualFolder.load_count_invited(
+            info.context,
+            domain_name=domain_name,  # scope
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+        )
+        items = await VirtualFolder.load_slice_invited(
+            info.context,
+            limit,
+            offset,
+            domain_name=domain_name,  # scopes
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+            order=order,
+        )
+        return VirtualFolderList(items, total_count)
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_id")
+    async def resolve_vfolder_project_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        domain_name: str = None,
+        user_id: uuid.UUID = None,  # not used, fixed
+        filter: str = None,
+        order: str = None,
+    ) -> VirtualFolderList:
+        total_count = await VirtualFolder.load_count_project(
+            info.context,
+            domain_name=domain_name,  # scope
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+        )
+        items = await VirtualFolder.load_slice_project(
+            info.context,
+            limit,
+            offset,
+            domain_name=domain_name,  # scopes
+            user_id=info.context.user["uuid"],  # scope
+            filter=filter,
+            order=order,
+        )
+        return VirtualFolderList(items, total_count)
+
+    @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_compute_container_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1275,7 +1713,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_compute_container(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         container_id: str,
     ) -> ComputeContainer:
@@ -1290,7 +1728,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_compute_session_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1326,7 +1764,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_compute_session(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         id: SessionId,
         *,
@@ -1349,7 +1787,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_legacy_compute_session_list(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         limit: int,
         offset: int,
@@ -1384,7 +1822,7 @@ class Queries(graphene.ObjectType):
     @staticmethod
     @scoped_query(autofill_user=False, user_key="access_key")
     async def resolve_legacy_compute_session(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
         sess_id: str,
         *,
@@ -1414,11 +1852,244 @@ class Queries(graphene.ObjectType):
 
     @staticmethod
     async def resolve_vfolder_host_permissions(
-        executor: AsyncioExecutor,
+        root: Any,
         info: graphene.ResolveInfo,
     ) -> PredefinedAtomicPermission:
         graph_ctx: GraphQueryContext = info.context
         return await PredefinedAtomicPermission.load_all(graph_ctx)
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_endpoint(
+        root: Any,
+        info: graphene.ResolveInfo,
+        endpoint_id: uuid.UUID,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> Endpoint:
+        graph_ctx: GraphQueryContext = info.context
+        return await Endpoint.load_item(
+            graph_ctx,
+            endpoint_id=endpoint_id,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_endpoint_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        filter: Optional[str] = None,
+        order: Optional[str] = None,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> EndpointList:
+        total_count = await Endpoint.load_count(
+            info.context,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+        endpoint_list = await Endpoint.load_slice(
+            info.context,
+            limit,
+            offset,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+            filter=filter,
+            order=order,
+        )
+        return EndpointList(endpoint_list, total_count)
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_routing(
+        root: Any,
+        info: graphene.ResolveInfo,
+        routing_id: uuid.UUID,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> Routing:
+        graph_ctx: GraphQueryContext = info.context
+        return await Routing.load_item(
+            graph_ctx,
+            routing_id=routing_id,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_routing_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        filter: Optional[str] = None,
+        order: Optional[str] = None,
+        endpoint_id: Optional[uuid.UUID] = None,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> RoutingList:
+        total_count = await Routing.load_count(
+            info.context,
+            endpoint_id=endpoint_id,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+        routing_list = await Routing.load_slice(
+            info.context,
+            limit,
+            offset,
+            endpoint_id=endpoint_id,
+            filter=filter,
+            order=order,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+        return RoutingList(routing_list, total_count)
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_endpoint_token(
+        root: Any,
+        info: graphene.ResolveInfo,
+        token: str,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> EndpointToken:
+        graph_ctx: GraphQueryContext = info.context
+        return await EndpointToken.load_item(
+            graph_ctx,
+            token,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+
+    @staticmethod
+    @scoped_query(autofill_user=False, user_key="user_uuid")
+    async def resolve_endpoint_token_list(
+        root: Any,
+        info: graphene.ResolveInfo,
+        limit: int,
+        offset: int,
+        *,
+        filter: Optional[str] = None,
+        order: Optional[str] = None,
+        endpoint_id: Optional[uuid.UUID] = None,
+        project: Optional[uuid.UUID] = None,
+        domain_name: Optional[str] = None,
+        user_uuid: Optional[uuid.UUID] = None,
+    ) -> EndpointTokenList:
+        total_count = await EndpointToken.load_count(
+            info.context,
+            endpoint_id=endpoint_id,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+        token_list = await EndpointToken.load_slice(
+            info.context,
+            limit,
+            offset,
+            endpoint_id=endpoint_id,
+            filter=filter,
+            order=order,
+            project=project,
+            domain_name=domain_name,
+            user_uuid=user_uuid,
+        )
+        return EndpointTokenList(token_list, total_count)
+
+    @staticmethod
+    async def resolve_quota_scope(
+        root: Any,
+        info: graphene.ResolveInfo,
+        *,
+        quota_scope_id: Optional[str] = None,
+        storage_host_name: Optional[str] = None,
+    ) -> QuotaScope:
+        if not quota_scope_id or not storage_host_name:
+            raise ValueError("Either quota_scope_id and storage_host_name has to be defined")
+        graph_ctx: GraphQueryContext = info.context
+        qsid = QuotaScopeID.parse(quota_scope_id)
+        volumes_by_host = await graph_ctx.storage_manager.get_all_volumes()
+        for host, volume in volumes_by_host:
+            if f"{host}:{volume['name']}" == storage_host_name:
+                break
+        else:
+            raise ValueError(f"storage volume {storage_host_name} does not exist")
+        async with graph_ctx.db.begin_readonly_session() as sess:
+            await ensure_quota_scope_accessible_by_user(sess, qsid, graph_ctx.user)
+            return QuotaScope(
+                quota_scope_id=quota_scope_id,
+                storage_host_name=storage_host_name,
+            )
+
+    @staticmethod
+    @privileged_query(UserRole.SUPERADMIN)
+    async def resolve_container_registry(
+        root: Any,
+        info: graphene.ResolveInfo,
+        hostname: str,
+    ) -> ContainerRegistry:
+        ctx: GraphQueryContext = info.context
+        return await ContainerRegistry.load_registry(ctx, hostname)
+
+    @staticmethod
+    @privileged_query(UserRole.SUPERADMIN)
+    async def resolve_container_registries(
+        root: Any,
+        info: graphene.ResolveInfo,
+    ) -> Sequence[ContainerRegistry]:
+        ctx: GraphQueryContext = info.context
+        return await ContainerRegistry.load_all(ctx)
+
+    async def resolve_model_card(
+        root: Any,
+        info: graphene.ResolveInfo,
+        id: str,
+    ):
+        return await ModelCard.get_node(info, id)
+
+    async def resolve_model_cards(
+        root: Any,
+        info: graphene.ResolveInfo,
+        *,
+        filter: str | None = None,
+        order: str | None = None,
+        offset: int | None = None,
+        after: str | None = None,
+        first: int | None = None,
+        before: str | None = None,
+        last: int | None = None,
+    ) -> ConnectionResolverResult:
+        return await ModelCard.get_connection(
+            info,
+            filter,
+            order,
+            offset,
+            after,
+            first,
+            before,
+            last,
+        )
 
 
 class GQLMutationPrivilegeCheckMiddleware:

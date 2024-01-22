@@ -19,17 +19,19 @@ from aiotools import TaskGroup
 
 from ai.backend.agent.docker.utils import PersistentServiceContainer
 from ai.backend.common.docker import ImageRef
+from ai.backend.common.events import EventProducer
 from ai.backend.common.lock import FileLock
 from ai.backend.common.logging import BraceStyleAdapter
-from ai.backend.common.types import CommitStatus, KernelId, Sentinel
+from ai.backend.common.types import AgentId, CommitStatus, KernelId, Sentinel, SessionId
 from ai.backend.common.utils import current_loop
 from ai.backend.plugin.entrypoint import scan_entrypoints
 
 from ..kernel import AbstractCodeRunner, AbstractKernel
 from ..resources import KernelResourceSpec
+from ..types import AgentEventData
 from ..utils import closing_async, get_arch_name
 
-log = BraceStyleAdapter(logging.getLogger(__name__))
+log = BraceStyleAdapter(logging.getLogger(__spec__.name))  # type: ignore[name-defined]
 
 DEFAULT_CHUNK_SIZE: Final = 256 * 1024  # 256 KiB
 DEFAULT_INFLIGHT_CHUNKS: Final = 8
@@ -39,6 +41,8 @@ class DockerKernel(AbstractKernel):
     def __init__(
         self,
         kernel_id: KernelId,
+        session_id: SessionId,
+        agent_id: AgentId,
         image: ImageRef,
         version: int,
         *,
@@ -50,6 +54,8 @@ class DockerKernel(AbstractKernel):
     ) -> None:
         super().__init__(
             kernel_id,
+            session_id,
+            agent_id,
             image,
             version,
             agent_config=agent_config,
@@ -70,10 +76,12 @@ class DockerKernel(AbstractKernel):
         super().__setstate__(props)
 
     async def create_code_runner(
-        self, *, client_features: FrozenSet[str], api_version: int
+        self, event_producer: EventProducer, *, client_features: FrozenSet[str], api_version: int
     ) -> AbstractCodeRunner:
         return await DockerCodeRunner.new(
             self.kernel_id,
+            self.session_id,
+            event_producer,
             kernel_host=self.data["kernel_host"],
             repl_in_port=self.data["repl_in_port"],
             repl_out_port=self.data["repl_out_port"],
@@ -115,15 +123,18 @@ class DockerKernel(AbstractKernel):
                 break
         else:
             return {"status": "failed", "error": "invalid service name"}
-        result = await self.runner.feed_start_service(
-            {
-                "name": service,
-                "port": sport["container_ports"][0],  # primary port
-                "ports": sport["container_ports"],
-                "protocol": sport["protocol"],
-                "options": opts,
-            }
-        )
+        result = await self.runner.feed_start_service({
+            "name": service,
+            "port": sport["container_ports"][0],  # primary port
+            "ports": sport["container_ports"],
+            "protocol": sport["protocol"],
+            "options": opts,
+        })
+        return result
+
+    async def start_model_service(self, model_service: Mapping[str, Any]):
+        assert self.runner is not None
+        result = await self.runner.feed_start_model_service(model_service)
         return result
 
     async def shutdown_service(self, service: str):
@@ -141,7 +152,7 @@ class DockerKernel(AbstractKernel):
         lock_path = commit_path / "lock" / str(kernel_id)
         return commit_path, lock_path
 
-    async def check_duplicate_commit(self, kernel_id: KernelId, subdir: str):
+    async def check_duplicate_commit(self, kernel_id: KernelId, subdir: str) -> CommitStatus:
         _, lock_path = self._get_commit_path(kernel_id, subdir)
         if lock_path.exists():
             return CommitStatus.ONGOING
@@ -284,11 +295,10 @@ class DockerKernel(AbstractKernel):
         container_id = self.data["container_id"]
 
         # Confine the lookable paths in the home directory
-        home_path = Path("/home/work")
-        try:
-            resolved_path = (home_path / container_path).resolve()
-            resolved_path.relative_to(home_path)
-        except ValueError:
+        home_path = Path("/home/work").resolve()
+        resolved_path = (home_path / container_path).resolve()
+
+        if str(os.path.commonpath([resolved_path, home_path])) != str(home_path):
             raise PermissionError("You cannot list files outside /home/work")
 
         # Gather individual file information in the target path.
@@ -301,7 +311,8 @@ class DockerKernel(AbstractKernel):
 
         files = []
         for f in os.scandir(sys.argv[1]):
-            fstat = f.stat()
+            fstat = f.stat(follow_symlinks=False)
+
             ctime = fstat.st_ctime  # TODO: way to get concrete create time?
             mtime = fstat.st_mtime
             atime = fstat.st_atime
@@ -334,9 +345,12 @@ class DockerKernel(AbstractKernel):
         err = raw_err.decode("utf-8")
         return {"files": out, "errors": err, "abspath": str(container_path)}
 
+    async def notify_event(self, evdata: AgentEventData):
+        assert self.runner is not None
+        await self.runner.feed_event(evdata)
+
 
 class DockerCodeRunner(AbstractCodeRunner):
-
     kernel_host: str
     repl_in_port: int
     repl_out_port: int
@@ -344,6 +358,8 @@ class DockerCodeRunner(AbstractCodeRunner):
     def __init__(
         self,
         kernel_id,
+        session_id,
+        event_producer,
         *,
         kernel_host,
         repl_in_port,
@@ -351,7 +367,13 @@ class DockerCodeRunner(AbstractCodeRunner):
         exec_timeout=0,
         client_features=None,
     ) -> None:
-        super().__init__(kernel_id, exec_timeout=exec_timeout, client_features=client_features)
+        super().__init__(
+            kernel_id,
+            session_id,
+            event_producer,
+            exec_timeout=exec_timeout,
+            client_features=client_features,
+        )
         self.kernel_host = kernel_host
         self.repl_in_port = repl_in_port
         self.repl_out_port = repl_out_port
@@ -363,19 +385,13 @@ class DockerCodeRunner(AbstractCodeRunner):
         return f"tcp://{self.kernel_host}:{self.repl_out_port}"
 
 
-async def prepare_krunner_env_impl(distro: str) -> Tuple[str, Optional[str]]:
-    if distro.startswith("static-"):
-        distro_name = distro.replace("-", "_")  # pkg/mod name use underscores
-    else:
-        if (m := re.search(r"^([a-z]+)\d+\.\d+$", distro)) is None:
-            raise ValueError('Unrecognized "distro[version]" format string.')
-        distro_name = m.group(1)
+async def prepare_krunner_env_impl(distro: str, entrypoint_name: str) -> Tuple[str, Optional[str]]:
     docker = Docker()
     arch = get_arch_name()
     current_version = int(
         Path(
             pkg_resources.resource_filename(
-                f"ai.backend.krunner.{distro_name}", f"./krunner-version.{distro}.txt"
+                f"ai.backend.krunner.{entrypoint_name}", f"./krunner-version.{distro}.txt"
             )
         )
         .read_text()
@@ -386,7 +402,7 @@ async def prepare_krunner_env_impl(distro: str) -> Tuple[str, Optional[str]]:
 
     try:
         for item in await docker.images.list():
-            if item["RepoTags"] is None:
+            if item["RepoTags"] is None or len(item["RepoTags"]) == 0:
                 continue
             if item["RepoTags"][0] == extractor_image:
                 break
@@ -416,40 +432,36 @@ async def prepare_krunner_env_impl(distro: str) -> Tuple[str, Optional[str]]:
         if do_create:
             archive_path = Path(
                 pkg_resources.resource_filename(
-                    f"ai.backend.krunner.{distro_name}", f"krunner-env.{distro}.{arch}.tar.xz"
+                    f"ai.backend.krunner.{entrypoint_name}", f"krunner-env.{distro}.{arch}.tar.xz"
                 )
             ).resolve()
             if not archive_path.exists():
                 log.warning("krunner environment for {} ({}) is not supported!", distro, arch)
             else:
                 log.info("populating {} volume version {}", volume_name, current_version)
-                await docker.volumes.create(
-                    {
-                        "Name": volume_name,
-                        "Driver": "local",
-                    }
-                )
+                await docker.volumes.create({
+                    "Name": volume_name,
+                    "Driver": "local",
+                })
                 extractor_path = Path(
                     pkg_resources.resource_filename("ai.backend.runner", "krunner-extractor.sh")
                 ).resolve()
-                proc = await asyncio.create_subprocess_exec(
-                    *[
-                        "docker",
-                        "run",
-                        "--rm",
-                        "-i",
-                        "-v",
-                        f"{archive_path}:/root/archive.tar.xz",
-                        "-v",
-                        f"{extractor_path}:/root/krunner-extractor.sh",
-                        "-v",
-                        f"{volume_name}:/root/volume",
-                        "-e",
-                        f"KRUNNER_VERSION={current_version}",
-                        extractor_image,
-                        "/root/krunner-extractor.sh",
-                    ]
-                )
+                proc = await asyncio.create_subprocess_exec(*[
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-i",
+                    "-v",
+                    f"{archive_path}:/root/archive.tar.xz",
+                    "-v",
+                    f"{extractor_path}:/root/krunner-extractor.sh",
+                    "-v",
+                    f"{volume_name}:/root/volume",
+                    "-e",
+                    f"KRUNNER_VERSION={current_version}",
+                    extractor_image,
+                    "/root/krunner-extractor.sh",
+                ])
                 if await proc.wait() != 0:
                     raise RuntimeError("extracting krunner environment has failed!")
     except Exception:
@@ -467,7 +479,7 @@ async def prepare_krunner_env(local_config: Mapping[str, Any]) -> Mapping[str, S
     tar archives.
     """
 
-    all_distros = []
+    all_distros: list[tuple[str, str]] = []
     entry_prefix = "backendai_krunner_v10"
     for entrypoint in scan_entrypoints(entry_prefix):
         log.debug("loading krunner pkg: {}", entrypoint.module)
@@ -483,12 +495,12 @@ async def prepare_krunner_env(local_config: Mapping[str, Any]) -> Mapping[str, S
             .read_text()
             .splitlines()
         )
-        all_distros.extend(provided_versions)
+        all_distros.extend((distro, entrypoint.name) for distro in provided_versions)
 
     tasks = []
     async with TaskGroup() as tg:
-        for distro in all_distros:
-            tasks.append(tg.create_task(prepare_krunner_env_impl(distro)))
+        for distro, entrypoint_name in all_distros:
+            tasks.append(tg.create_task(prepare_krunner_env_impl(distro, entrypoint_name)))
     distro_volumes = [t.result() for t in tasks if not t.cancelled()]
     result = {}
     for distro_name_and_version, volume_name in distro_volumes:
@@ -513,10 +525,7 @@ LinuxKit_CMD_EXEC_PREFIX = [
 
 
 async def prepare_kernel_metadata_uri_handling(local_config: Mapping[str, Any]) -> None:
-    async with closing_async(Docker()) as docker:
-        kernel_version = (await docker.version())["KernelVersion"]
-    if "linuxkit" in kernel_version:
-        local_config["agent"]["docker-mode"] = "linuxkit"
+    if local_config["agent"]["docker-mode"] == "linuxkit":
         # Docker Desktop mode
         arch = get_arch_name()
         proxy_worker_binary = pkg_resources.resource_filename(
@@ -532,9 +541,12 @@ async def prepare_kernel_metadata_uri_handling(local_config: Mapping[str, Any]) 
                 "Cmd": [
                     "/bin/sh",
                     "-c",
-                    "ctr -n services.linuxkit t kill --exec-id metaproxy docker;"
-                    "ctr -n services.linuxkit t exec --exec-id metaproxy docker "
-                    f"/host_mnt/tmp/backend.ai/linuxkit-metadata-proxy -remote-port {server_port}",
+                    (
+                        "ctr -n services.linuxkit t kill --exec-id metaproxy docker;ctr -n"
+                        " services.linuxkit t exec --exec-id metaproxy docker"
+                        " /host_mnt/tmp/backend.ai/linuxkit-metadata-proxy -remote-port"
+                        f" {server_port}"
+                    ),
                 ],
                 "HostConfig": {
                     "PidMode": "host",
@@ -583,6 +595,3 @@ async def prepare_kernel_metadata_uri_handling(local_config: Mapping[str, Any]) 
             log.info("Inserted the iptables rules.")
         else:
             log.info("The iptables rule already exists.")
-    else:
-        # Linux Mode
-        local_config["agent"]["docker-mode"] = "native"

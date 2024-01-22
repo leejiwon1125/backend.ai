@@ -2,7 +2,6 @@ from typing import Any, Mapping
 
 
 class ConfigurationError(Exception):
-
     invalid_data: Mapping[str, Any]
 
     def __init__(self, invalid_data: Mapping[str, Any]) -> None:
@@ -76,4 +75,16 @@ class AliasResolutionFailed(ValueError):
 class InvalidIpAddressValue(ValueError):
     """
     Represents an invalid value for ip_address.
+    """
+
+
+class VolumeMountFailed(RuntimeError):
+    """
+    Represents a mount process failure.
+    """
+
+
+class VolumeUnmountFailed(RuntimeError):
+    """
+    Represents a umount process failure.
     """

@@ -10,16 +10,13 @@ class LogQHandler(QueueHandler):
             print(self.formatter.format(record), file=buf)
             if record.exc_info is not None:
                 print(self.formatter.formatException(record.exc_info), file=buf)
-            self.queue.put_nowait(
-                (
-                    b"stderr",
-                    buf.getvalue().encode("utf8"),
-                )
-            )
+            self.queue.put_nowait((
+                b"stderr",
+                buf.getvalue().encode("utf8"),
+            ))
 
 
 class BraceMessage:
-
     __slots__ = ("fmt", "args")
 
     def __init__(self, fmt, args):

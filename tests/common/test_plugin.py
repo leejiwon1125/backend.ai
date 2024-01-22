@@ -36,7 +36,6 @@ class DummyPlugin(AbstractPlugin):
 
 @dataclass
 class DummyEntrypoint:
-
     name: str
     load_result: Type[AbstractPlugin] | Callable[..., AbstractPlugin]
     value: str = "dummy.mod.DummyPlugin"
@@ -69,8 +68,7 @@ def mock_entrypoints_with_class(
     blocklist: set[str] = None,
     *,
     plugin_cls: list[Type[AbstractPlugin]],
-) -> Iterator[DummyEntrypoint]:
-    ...
+) -> Iterator[DummyEntrypoint]: ...
 
 
 @overload
@@ -80,8 +78,7 @@ def mock_entrypoints_with_class(
     blocklist: set[str] = None,
     *,
     plugin_cls: Type[AbstractPlugin],
-) -> DummyEntrypoint:
-    ...
+) -> DummyEntrypoint: ...
 
 
 def mock_entrypoints_with_class(
@@ -201,7 +198,6 @@ async def test_plugin_context_config_autoupdate(etcd, mocker):
 
 
 class DummyHookPassingPlugin(HookPlugin):
-
     config_watch_enabled = False
 
     _entrypoint_name = "hook-p"
@@ -233,7 +229,6 @@ class DummyHookPassingPlugin(HookPlugin):
 
 
 class DummyHookRejectingPlugin(HookPlugin):
-
     config_watch_enabled = False
 
     _entrypoint_name = "hook-r"
@@ -265,7 +260,6 @@ class DummyHookRejectingPlugin(HookPlugin):
 
 
 class DummyHookErrorPlugin(HookPlugin):
-
     config_watch_enabled = False
 
     _entrypoint_name = "hook-e"

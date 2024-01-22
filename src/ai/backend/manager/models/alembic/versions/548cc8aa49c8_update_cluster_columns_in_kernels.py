@@ -5,6 +5,7 @@ Revises: 1e673659b283
 Create Date: 2020-09-08 18:50:05.594899
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.sql import text
@@ -49,7 +50,7 @@ def upgrade():
         ["access_key", "session_id"],
         unique=True,
         postgresql_where=sa.text(
-            "status NOT IN ('TERMINATED', 'CANCELLED') " "and cluster_role = 'main'"
+            "status NOT IN ('TERMINATED', 'CANCELLED') and cluster_role = 'main'"
         ),
     )
 
@@ -68,6 +69,6 @@ def downgrade():
         "kernels",
         ["access_key", "session_name"],
         unique=True,
-        postgresql_where=sa.text("status NOT IN ('TERMINATED', 'CANCELLED') " "and role = 'main'"),
+        postgresql_where=sa.text("status NOT IN ('TERMINATED', 'CANCELLED') and role = 'main'"),
     )
     op.create_index("ix_kernels_sess_id_role", "kernels", ["session_name", "role"], unique=False)

@@ -12,9 +12,9 @@ from aiohttp import web
 from ai.backend.common import validators as tx
 from ai.backend.common.logging import BraceStyleAdapter
 
-from ..models import TemplateType, UserRole
-from ..models import association_groups_users as agus
 from ..models import (
+    TemplateType,
+    UserRole,
     domains,
     groups,
     keypairs,
@@ -22,6 +22,7 @@ from ..models import (
     session_templates,
     users,
 )
+from ..models import association_groups_users as agus
 from ..models.session_template import check_cluster_template
 from .auth import auth_required
 from .exceptions import InvalidAPIParameters, TaskTemplateNotFound
@@ -32,7 +33,7 @@ from .utils import check_api_params, get_access_key_scopes
 if TYPE_CHECKING:
     from .context import RootContext
 
-log = BraceStyleAdapter(logging.getLogger(__name__))
+log = BraceStyleAdapter(logging.getLogger(__spec__.name))  # type: ignore[name-defined]
 
 
 @server_status_required(READ_ALLOWED)
@@ -154,17 +155,15 @@ async def create(request: web.Request, params: Any) -> web.Response:
             "id": template_id,
             "user": user_uuid.hex,
         }
-        query = session_templates.insert().values(
-            {
-                "id": template_id,
-                "domain_name": params["domain"],
-                "group_id": group_id,
-                "user_uuid": user_uuid,
-                "name": template_data["metadata"]["name"],
-                "template": template_data,
-                "type": TemplateType.CLUSTER,
-            }
-        )
+        query = session_templates.insert().values({
+            "id": template_id,
+            "domain_name": params["domain"],
+            "group_id": group_id,
+            "user_uuid": user_uuid,
+            "name": template_data["metadata"]["name"],
+            "template": template_data,
+            "type": TemplateType.CLUSTER,
+        })
         result = await conn.execute(query)
         assert result.rowcount == 1
     return web.json_response(resp)
@@ -173,12 +172,10 @@ async def create(request: web.Request, params: Any) -> web.Response:
 @auth_required
 @server_status_required(READ_ALLOWED)
 @check_api_params(
-    t.Dict(
-        {
-            t.Key("all", default=False): t.ToBool,
-            tx.AliasedKey(["group_id", "groupId"], default=None): tx.UUID | t.String | t.Null,
-        }
-    ),
+    t.Dict({
+        t.Key("all", default=False): t.ToBool,
+        tx.AliasedKey(["group_id", "groupId"], default=None): tx.UUID | t.String | t.Null,
+    }),
 )
 async def list_template(request: web.Request, params: Any) -> web.Response:
     resp = []
@@ -207,26 +204,24 @@ async def list_template(request: web.Request, params: Any) -> web.Response:
             entries = []
             for row in result:
                 is_owner = True if row.session_templates_user == user_uuid else False
-                entries.append(
-                    {
-                        "name": row.session_templates_name,
-                        "id": row.session_templates_id,
-                        "created_at": row.session_templates_created_at,
-                        "is_owner": is_owner,
-                        "user": (
-                            str(row.session_templates_user_uuid)
-                            if row.session_templates_user_uuid
-                            else None
-                        ),
-                        "group": (
-                            str(row.session_templates_group_id)
-                            if row.session_templates_group_id
-                            else None
-                        ),
-                        "user_email": row.users_email,
-                        "group_name": row.groups_name,
-                    }
-                )
+                entries.append({
+                    "name": row.session_templates_name,
+                    "id": row.session_templates_id,
+                    "created_at": row.session_templates_created_at,
+                    "is_owner": is_owner,
+                    "user": (
+                        str(row.session_templates_user_uuid)
+                        if row.session_templates_user_uuid
+                        else None
+                    ),
+                    "group": (
+                        str(row.session_templates_group_id)
+                        if row.session_templates_group_id
+                        else None
+                    ),
+                    "user_email": row.users_email,
+                    "group_name": row.groups_name,
+                })
         else:
             extra_conds = None
             if params["group_id"] is not None:
@@ -242,31 +237,27 @@ async def list_template(request: web.Request, params: Any) -> web.Response:
             )
 
         for entry in entries:
-            resp.append(
-                {
-                    "name": entry["name"],
-                    "id": entry["id"].hex,
-                    "created_at": str(entry["created_at"]),
-                    "is_owner": entry["is_owner"],
-                    "user": str(entry["user"]),
-                    "group": str(entry["group"]),
-                    "user_email": entry["user_email"],
-                    "group_name": entry["group_name"],
-                    "type": "user" if entry["user"] is not None else "group",
-                }
-            )
+            resp.append({
+                "name": entry["name"],
+                "id": entry["id"].hex,
+                "created_at": str(entry["created_at"]),
+                "is_owner": entry["is_owner"],
+                "user": str(entry["user"]),
+                "group": str(entry["group"]),
+                "user_email": entry["user_email"],
+                "group_name": entry["group_name"],
+                "type": "user" if entry["user"] is not None else "group",
+            })
         return web.json_response(resp)
 
 
 @auth_required
 @server_status_required(READ_ALLOWED)
 @check_api_params(
-    t.Dict(
-        {
-            t.Key("format", default="yaml"): t.Null | t.Enum("yaml", "json"),
-            t.Key("owner_access_key", default=None): t.Null | t.String,
-        }
-    ),
+    t.Dict({
+        t.Key("format", default="yaml"): t.Null | t.Enum("yaml", "json"),
+        t.Key("owner_access_key", default=None): t.Null | t.String,
+    }),
 )
 async def get(request: web.Request, params: Any) -> web.Response:
     if params["format"] not in ["yaml", "json"]:
@@ -305,12 +296,10 @@ async def get(request: web.Request, params: Any) -> web.Response:
 @auth_required
 @server_status_required(READ_ALLOWED)
 @check_api_params(
-    t.Dict(
-        {
-            t.Key("payload"): t.String,
-            t.Key("owner_access_key", default=None): t.Null | t.String,
-        }
-    ),
+    t.Dict({
+        t.Key("payload"): t.String,
+        t.Key("owner_access_key", default=None): t.Null | t.String,
+    }),
 )
 async def put(request: web.Request, params: Any) -> web.Response:
     root_ctx: RootContext = request.app["_root.context"]
@@ -357,11 +346,9 @@ async def put(request: web.Request, params: Any) -> web.Response:
 @auth_required
 @server_status_required(READ_ALLOWED)
 @check_api_params(
-    t.Dict(
-        {
-            t.Key("owner_access_key", default=None): t.Null | t.String,
-        }
-    ),
+    t.Dict({
+        t.Key("owner_access_key", default=None): t.Null | t.String,
+    }),
 )
 async def delete(request: web.Request, params: Any) -> web.Response:
     root_ctx: RootContext = request.app["_root.context"]

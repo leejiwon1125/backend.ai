@@ -3,7 +3,7 @@ from typing import Sequence
 from ..request import Request
 from .base import BaseFunction, api_function
 
-__all__ = "Resource"
+__all__ = ("Resource",)
 
 
 class Resource(BaseFunction):
@@ -25,7 +25,7 @@ class Resource(BaseFunction):
     @classmethod
     async def check_presets(cls):
         """
-        Lists all resource presets in the current scaling group with additiona
+        Lists all resource presets in the current scaling group with additional
         information.
         """
         rqst = Request("POST", "/resource/check-presets")
@@ -52,12 +52,10 @@ class Resource(BaseFunction):
         :param group_ids: Groups IDs to be included in the result.
         """
         rqst = Request("GET", "/resource/usage/month")
-        rqst.set_json(
-            {
-                "month": month,
-                "group_ids": group_ids,
-            }
-        )
+        rqst.set_json({
+            "month": month,
+            "group_ids": group_ids,
+        })
         async with rqst.fetch() as resp:
             return await resp.json()
 
@@ -65,7 +63,7 @@ class Resource(BaseFunction):
     @classmethod
     async def usage_per_period(cls, group_id: str, start_date: str, end_date: str):
         """
-        Get usage statistics for a group specified by `group_id` for time betweeen
+        Get usage statistics for a group specified by `group_id` for time between
         `start_date` and `end_date`.
 
         :param start_date: start date in string format (yyyymmdd).
@@ -73,13 +71,11 @@ class Resource(BaseFunction):
         :param group_id: Groups ID to list usage statistics.
         """
         rqst = Request("GET", "/resource/usage/period")
-        rqst.set_json(
-            {
-                "group_id": group_id,
-                "start_date": start_date,
-                "end_date": end_date,
-            }
-        )
+        rqst.set_json({
+            "group_id": group_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        })
         async with rqst.fetch() as resp:
             return await resp.json()
 

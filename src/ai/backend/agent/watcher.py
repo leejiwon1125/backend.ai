@@ -19,11 +19,12 @@ from ai.backend.common import config, utils
 from ai.backend.common import validators as tx
 from ai.backend.common.etcd import AsyncEtcd, ConfigScopes
 from ai.backend.common.logging import BraceStyleAdapter, Logger
+from ai.backend.common.types import LogSeverity
 from ai.backend.common.utils import Fstab
 
 from . import __version__ as VERSION
 
-log = BraceStyleAdapter(logging.getLogger("ai.backend.agent.watcher"))
+log = BraceStyleAdapter(logging.getLogger(__spec__.name))  # type: ignore[name-defined]
 
 shutdown_enabled = False
 
@@ -55,23 +56,19 @@ async def handle_status(request: web.Request) -> web.Response:
     else:
         status = "unknown"
     await proc.wait()
-    return web.json_response(
-        {
-            "agent-status": status,  # maybe also "inactive", "activating"
-            "watcher-status": "active",
-        }
-    )
+    return web.json_response({
+        "agent-status": status,  # maybe also "inactive", "activating"
+        "watcher-status": "active",
+    })
 
 
 async def handle_soft_reset(request: web.Request) -> web.Response:
     svc = request.app["config"]["watcher"]["target-service"]
     proc = await asyncio.create_subprocess_exec(*["sudo", "systemctl", "reload", svc])
     await proc.wait()
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_hard_reset(request: web.Request) -> web.Response:
@@ -82,11 +79,9 @@ async def handle_hard_reset(request: web.Request) -> web.Response:
     await proc.wait()
     proc = await asyncio.create_subprocess_exec(*["sudo", "systemctl", "start", svc])
     await proc.wait()
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_shutdown(request: web.Request) -> web.Response:
@@ -96,44 +91,36 @@ async def handle_shutdown(request: web.Request) -> web.Response:
     await proc.wait()
     shutdown_enabled = True
     signal.alarm(1)
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_agent_start(request: web.Request) -> web.Response:
     svc = request.app["config"]["watcher"]["target-service"]
     proc = await asyncio.create_subprocess_exec(*["sudo", "systemctl", "start", svc])
     await proc.wait()
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_agent_stop(request: web.Request) -> web.Response:
     svc = request.app["config"]["watcher"]["target-service"]
     proc = await asyncio.create_subprocess_exec(*["sudo", "systemctl", "stop", svc])
     await proc.wait()
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_agent_restart(request: web.Request) -> web.Response:
     svc = request.app["config"]["watcher"]["target-service"]
     proc = await asyncio.create_subprocess_exec(*["sudo", "systemctl", "restart", svc])
     await proc.wait()
-    return web.json_response(
-        {
-            "result": "ok",
-        }
-    )
+    return web.json_response({
+        "result": "ok",
+    })
 
 
 async def handle_fstab_detail(request: web.Request) -> web.Response:
@@ -334,39 +321,38 @@ async def watcher_server(loop, pidx, args):
     "-f",
     "--config-path",
     "--config",
-    type=Path,
+    type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="The config file path. (default: ./agent.conf and /etc/backend.ai/agent.conf)",
 )
 @click.option(
     "--debug",
     is_flag=True,
-    help="Enable the debug mode and override the global log level to DEBUG.",
+    help="Set the logging level to DEBUG",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice([*LogSeverity.__members__.keys()], case_sensitive=False),
+    default="INFO",
+    help="Set the logging verbosity level",
 )
 @click.pass_context
-def main(cli_ctx, config_path, debug):
-
+def main(ctx: click.Context, config_path: str, log_level: str, debug: bool) -> None:
     watcher_config_iv = (
-        t.Dict(
-            {
-                t.Key("watcher"): t.Dict(
-                    {
-                        t.Key("service-addr", default=("0.0.0.0", 6009)): tx.HostPortPair,
-                        t.Key("ssl-enabled", default=False): t.Bool,
-                        t.Key("ssl-cert", default=None): t.Null | tx.Path(type="file"),
-                        t.Key("ssl-key", default=None): t.Null | tx.Path(type="file"),
-                        t.Key("target-service", default="backendai-agent.service"): t.String,
-                        t.Key("soft-reset-available", default=False): t.Bool,
-                    }
-                ).allow_extra("*"),
-                t.Key("logging"): t.Any,  # checked in ai.backend.common.logging
-                t.Key("debug"): t.Dict(
-                    {
-                        t.Key("enabled", default=False): t.Bool,
-                    }
-                ).allow_extra("*"),
-            }
-        )
+        t.Dict({
+            t.Key("watcher"): t.Dict({
+                t.Key("service-addr", default=("0.0.0.0", 6009)): tx.HostPortPair,
+                t.Key("ssl-enabled", default=False): t.Bool,
+                t.Key("ssl-cert", default=None): t.Null | tx.Path(type="file"),
+                t.Key("ssl-key", default=None): t.Null | tx.Path(type="file"),
+                t.Key("target-service", default="backendai-agent.service"): t.String,
+                t.Key("soft-reset-available", default=False): t.Bool,
+            }).allow_extra("*"),
+            t.Key("logging"): t.Any,  # checked in ai.backend.common.logging
+            t.Key("debug"): t.Dict({
+                t.Key("enabled", default=False): t.Bool,
+            }).allow_extra("*"),
+        })
         .merge(config.etcd_config_iv)
         .allow_extra("*")
     )
@@ -384,7 +370,10 @@ def main(cli_ctx, config_path, debug):
         raw_cfg, ("watcher", "service-addr", "port"), "BACKEND_WATCHER_SERVICE_PORT"
     )
     if debug:
-        config.override_key(raw_cfg, ("debug", "enabled"), True)
+        log_level = "DEBUG"
+    config.override_key(raw_cfg, ("debug", "enabled"), log_level == "DEBUG")
+    config.override_key(raw_cfg, ("logging", "level"), log_level.upper())
+    config.override_key(raw_cfg, ("logging", "pkg-ns", "ai.backend"), log_level.upper())
 
     try:
         cfg = config.check(raw_cfg, watcher_config_iv)
@@ -422,7 +411,6 @@ def main(cli_ctx, config_path, debug):
             stop_signals={signal.SIGINT, signal.SIGTERM, signal.SIGALRM},
         )
         log.info("exit.")
-    return 0
 
 
 if __name__ == "__main__":
